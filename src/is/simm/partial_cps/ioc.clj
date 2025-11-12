@@ -259,7 +259,7 @@
       ;; Invoke termination handler, e.g. do-await
       (contains? breakpoints (var-name env head))
       (let [handler (resolve (breakpoints (var-name env head)))]
-        (resolve-sequentially ctx (rest form) (handler env r e)))
+        (resolve-sequentially ctx (rest form) (handler ctx r e)))
 
       (seq? form)
       (resolve-sequentially ctx form (fn [form] `(~r ~(seq form))))

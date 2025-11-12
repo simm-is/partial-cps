@@ -39,26 +39,25 @@
 
 ;; Simple async sequence implementation for testing
 (defrecord SimpleAsyncSeq [items]
-  is.simm.partial-cps.sequence/IAsyncSeq
-  (-afirst [_]
-    (async (clojure.core/first items)))
-  (-arest [_]
-    (async 
-      (when-let [rst (clojure.core/seq (clojure.core/rest items))]
-        (->SimpleAsyncSeq rst)))))
+  is.simm.partial-cps.sequence/PAsyncSeq
+  (anext [_]
+    (async
+      (when-let [s (clojure.core/seq items)]
+        [(clojure.core/first s)
+         (when-let [rst (clojure.core/seq (clojure.core/rest s))]
+           (->SimpleAsyncSeq rst))]))))
 
 ;; Slow async sequence for testing lazy evaluation
 (defrecord SlowAsyncSeq [items delay-ms processed-count]
-  is.simm.partial-cps.sequence/IAsyncSeq
-  (-afirst [_]
-    (async 
-      (when (clojure.core/seq items)
+  is.simm.partial-cps.sequence/PAsyncSeq
+  (anext [_]
+    (async
+      (when-let [s (clojure.core/seq items)]
         (swap! processed-count inc)
-        (await (future-delay delay-ms (clojure.core/first items))))))
-  (-arest [_]
-    (async 
-      (when-let [rst (clojure.core/seq (clojure.core/rest items))]
-        (->SlowAsyncSeq rst delay-ms processed-count)))))
+        (let [v (await (future-delay delay-ms (clojure.core/first s)))]
+          [v
+           (when-let [rst (clojure.core/seq (clojure.core/rest s))]
+             (->SlowAsyncSeq rst delay-ms processed-count))])))))
 
 (defn make-slow-seq [items delay-ms]
   (->SlowAsyncSeq items delay-ms (atom 0)))
@@ -305,11 +304,9 @@
 ;; Error Handling Tests
 (deftest test-sequence-with-error-in-source
   (testing "Error handling in async sequence operations"
-    (let [failing-seq (reify is.simm.partial-cps.sequence/IAsyncSeq
-                        (-afirst [_] 
-                          (async (throw (Exception. "Source error"))))
-                        (-arest [_] 
-                          (async nil)))
+    (let [failing-seq (reify is.simm.partial-cps.sequence/PAsyncSeq
+                        (anext [_]
+                          (async (throw (Exception. "Source error")))))
           result (try
                    (blocking-test
                     (async

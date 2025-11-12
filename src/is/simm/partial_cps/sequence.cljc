@@ -2,24 +2,44 @@
   (:refer-clojure :exclude [first rest sequence transduce into])
   (:require [is.simm.partial-cps.async :refer [async await]]))
 
-(defprotocol IAsyncSeq
-  (-afirst [this] "Returns async expression yielding first element")
-  (-arest [this] "Returns async expression yielding rest of sequence"))
+(defprotocol PAsyncSeq
+  "Protocol for asynchronous sequences.
+
+  Async sequences are lazy, pull-based sequences of values that may require
+  asynchronous computation. Unlike regular Clojure seqs, each step returns
+  an async expression that must be awaited."
+  (anext [this]
+    "Returns async expression yielding [value rest-seq] or nil if sequence is exhausted.
+
+    Example:
+      (async
+        (when-let [[value rest-seq] (await (anext aseq))]
+          (process value)
+          (recur rest-seq)))"))
 
 (extend-type nil
-  IAsyncSeq
-  (-afirst [_] (async))
-  (-arest [_] (async)))
+  PAsyncSeq
+  (anext [_] (async nil)))
 
 (defn first
-  "Returns async expression yielding first element"
+  "Returns async expression yielding first element, or nil if empty.
+
+  Convenience wrapper around anext."
   [async-seq]
-  (-afirst async-seq))
+  (async
+    (when-let [[v _] (await (anext async-seq))]
+      v)))
 
 (defn rest
-  "Returns async expression yielding rest of sequence"
+  "Returns async expression yielding rest of sequence after first element.
+
+  Returns nil if sequence is exhausted.
+
+  Convenience wrapper around anext."
   [async-seq]
-  (-arest async-seq))
+  (async
+    (when-let [[_ rest-seq] (await (anext async-seq))]
+      rest-seq)))
 
 ;; Transducers
 
@@ -31,13 +51,12 @@
       (loop [result init
              seq async-seq]
         (if seq
-          (let [v (await (first seq))]
-            (if (some? v)
-              (let [result' (rf result v)]
-                (if (reduced? result')
-                  (rf (unreduced result'))
-                  (recur result' (await (rest seq)))))
-              (rf result)))
+          (if-let [[v rest-seq] (await (anext seq))]
+            (let [result' (rf result v)]
+              (if (reduced? result')
+                (rf (unreduced result'))
+                (recur result' rest-seq)))
+            (rf result))
           (rf result))))))
 
 (defn into
@@ -46,12 +65,12 @@
   ([to async-seq]
    (transduce identity conj to async-seq)))
 
-(defprotocol ITransducerState
+(defprotocol PTransducerState
   "Protocol for managing shared transducer state"
   (-ensure-buffer! [this idx] "Ensure buffer has element at idx"))
 
 (deftype TransducerState [xf source-ref buffer completed?]
-  ITransducerState
+  PTransducerState
   (-ensure-buffer! [_ idx]
     (async
       ;; First check if we already have the element
@@ -67,57 +86,48 @@
               true
               ;; Need to pull from source
               (if-let [source @source-ref]
-                (let [v (await (first source))]
-                  (if v
-                    ;; Feed value through transducer
-                    (let [result (xf nil v)
-                          ;; Advance source
-                          next-source (await (rest source))
-                          _ (vreset! source-ref next-source)]
-                      (if (reduced? result)
-                        ;; Reduced - complete and check buffer
+                (if-let [[v next-source] (await (anext source))]
+                  ;; Got value - feed through transducer
+                  (let [result (xf nil v)
+                        _ (vreset! source-ref next-source)]
+                    (if (reduced? result)
+                      ;; Reduced - complete and check buffer
+                      (do
+                        (vreset! completed? true)
+                        ;; Call completion
+                        (xf (unreduced result))
+                        ;; Check if we have element after completion
+                        (> (count @buffer) idx))
+                      ;; Check if we have more source
+                      (if next-source
+                        ;; Continue pulling
+                        (recur)
+                        ;; No more source - need to call completion
                         (do
                           (vreset! completed? true)
-                          ;; Call completion
-                          (xf (unreduced result))
-                          ;; Check if we have element after completion
-                          (> (count @buffer) idx))
-                        ;; Check if we have more source
-                        (if next-source
-                          ;; Continue pulling
-                          (recur)
-                          ;; No more source - need to call completion
-                          (do
-                            (vreset! completed? true)
-                            (xf nil)
-                            (> (count @buffer) idx)))))
-                    ;; Source exhausted - call completion
-                    (do
-                      (vreset! completed? true)
-                      (vreset! source-ref nil)
-                      ;; Call completion - this may add more elements (e.g., partition-all)
-                      (xf nil)
-                      ;; Check if completion added the element we need
-                      (> (count @buffer) idx))))
+                          (xf nil)
+                          (> (count @buffer) idx)))))
+                  ;; Source exhausted - call completion
+                  (do
+                    (vreset! completed? true)
+                    (vreset! source-ref nil)
+                    ;; Call completion - this may add more elements (e.g., partition-all)
+                    (xf nil)
+                    ;; Check if completion added the element we need
+                    (> (count @buffer) idx)))
                 ;; No source available
                 (do
                   (vreset! completed? true)
                   false)))))))))
 
 (deftype TransducedAsyncSeq [state idx]
-  IAsyncSeq
-  (-afirst [_]
+  PAsyncSeq
+  (anext [_]
     (async
       ;; Ensure buffer has element at idx
       (when (await (-ensure-buffer! state idx))
-        (nth @(.-buffer state) idx))))
-
-  (-arest [_]
-    (async
-      ;; Check if current element exists before returning rest
-      (when (await (-ensure-buffer! state idx))
-        ;; Return seq starting at next position
-        (TransducedAsyncSeq. state (inc idx))))))
+        [(nth @(.-buffer state) idx)
+         (TransducedAsyncSeq. state (inc idx))]))))
 
 (defn sequence
   "Transform an AsyncSeq with a transducer, returning a new lazy AsyncSeq.

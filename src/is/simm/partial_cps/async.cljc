@@ -24,22 +24,30 @@
 (def ^:dynamic *in-trampoline* false)
 
 (defn await-handler
-  "Provides effect handler code for await."
-  [env r e]
+  "Provides effect handler code for await.
+
+  Receives ctx map containing:
+  - :env - macro expansion environment (&env)
+  - :r - success continuation
+  - :e - error continuation
+  - :breakpoints - registered breakpoints
+  Plus any additional macro-specific context fields."
+  [ctx r e]
   (fn [args]
     (assert (= (count args) 1) (str "Expected 1 argument, got " args))
-    `(letfn [(safe-r# [v#]
-                      (try
-                        (if *in-trampoline*
-                          (~r v#)
-                          (binding [*in-trampoline* true]
-                            (loop [result# (~r v#)]
-                              (if (instance? is.simm.partial_cps.runtime.Thunk result#)
-                                ;; If continuation returns a thunk, trampoline it
-                                (recur ((.-f ^is.simm.partial_cps.runtime.Thunk result#)))
-                                result#))))
-                        (catch ~(if (:js-globals env) :default `Throwable) t# (~e t#))))]
-       (~(first args) safe-r# ~e))))
+    (let [env (:env ctx)]
+      `(letfn [(safe-r# [v#]
+                        (try
+                          (if *in-trampoline*
+                            (~r v#)
+                            (binding [*in-trampoline* true]
+                              (loop [result# (~r v#)]
+                                (if (instance? is.simm.partial_cps.runtime.Thunk result#)
+                                  ;; If continuation returns a thunk, trampoline it
+                                  (recur ((.-f ^is.simm.partial_cps.runtime.Thunk result#)))
+                                  result#))))
+                          (catch ~(if (:js-globals env) :default `Throwable) t# (~e t#))))]
+         (~(first args) safe-r# ~e)))))
 
 (def ^:no-doc breakpoints
   {`await `await-handler})
