@@ -1,5 +1,5 @@
 (ns is.simm.partial-cps.sequence
-  (:refer-clojure :exclude [first rest sequence transduce into])
+  (:refer-clojure :exclude [await first rest sequence transduce into])
   (:require [is.simm.partial-cps.async :refer [async await]]))
 
 (defprotocol PAsyncSeq

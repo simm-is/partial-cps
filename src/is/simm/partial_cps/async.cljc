@@ -23,6 +23,31 @@
 
 (def ^:dynamic *in-trampoline* false)
 
+(defn invoke-continuation
+  "Invoke a CPS continuation, handling Thunk returns via trampoline.
+
+  This is the universal continuation invocation wrapper that ensures
+  Thunks are properly trampolined, preventing stack overflow in loops.
+
+  Usage:
+    (invoke-continuation resolve-fn value)
+    (invoke-continuation reject-fn error)
+
+  If the continuation returns a Thunk, it will be executed via trampoline.
+  This is essential for loop/recur constructs in CPS-transformed code."
+  [cont-fn & args]
+  (let [result (apply cont-fn args)]
+    (if (instance? is.simm.partial_cps.runtime.Thunk result)
+      (if *in-trampoline*
+        result  ; Already in trampoline, return Thunk
+        ;; Not in trampoline, execute it
+        (binding [*in-trampoline* true]
+          (loop [r result]
+            (if (instance? is.simm.partial_cps.runtime.Thunk r)
+              (recur ((.-f ^is.simm.partial_cps.runtime.Thunk r)))
+              r))))
+      result)))
+
 (defn await-handler
   "Provides effect handler code for await.
 
