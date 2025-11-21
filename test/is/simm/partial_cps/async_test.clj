@@ -355,5 +355,108 @@
       (is (= :completed result))
       (is (= [[:x 1] [:x 2] [:y 1] [:y 2]] @results)))))
 
+;; =============================================================================
+;; Binding Restoration Tests
+;; =============================================================================
+
+(def ^:dynamic *test-var* :outer)
+(def ^:dynamic *test-var-2* :outer-2)
+
+(deftest test-binding-simple-await
+  (testing "Binding restores outer value after await"
+    (let [result (blocking-test
+                   (async
+                     (binding [*test-var* :inner]
+                       (await (future-delay 10 :async-value))
+                       ;; After await, still in inner binding
+                       (is (= :inner *test-var*)))
+                     ;; After binding form, should restore outer
+                     *test-var*)
+                   1000)]
+      (is (= :outer result) "Should have restored outer binding after binding form exited"))))
+
+(deftest test-binding-nested-await
+  (testing "Nested bindings restore correctly"
+    (let [result (blocking-test
+                   (async
+                     (binding [*test-var* :level-1]
+                       (binding [*test-var* :level-2]
+                         (await (future-delay 10 :async-value))
+                         (is (= :level-2 *test-var*)))
+                       ;; Should restore to level-1
+                       (is (= :level-1 *test-var*)))
+                     ;; Should restore to outer
+                     *test-var*)
+                   1000)]
+      (is (= :outer result) "Should restore through nested bindings"))))
+
+(deftest test-binding-multiple-awaits
+  (testing "Multiple awaits in same binding restore correctly"
+    (let [result (blocking-test
+                   (async
+                     (binding [*test-var* :inner]
+                       (let [v1 (await (future-delay 10 :first))
+                             v2 (await (future-delay 10 :second))]
+                         (is (= :inner *test-var*) "Should maintain binding across multiple awaits")
+                         [v1 v2]))
+                     ;; After binding, should restore
+                     (is (= :outer *test-var*))
+                     *test-var*)
+                   1000)]
+      (is (= :outer result) "Should restore after multiple awaits"))))
+
+(deftest test-binding-multiple-vars
+  (testing "Multiple bound vars restore correctly"
+    (let [result (blocking-test
+                   (async
+                     (binding [*test-var* :inner-1
+                               *test-var-2* :inner-2]
+                       (await (future-delay 10 :async-value))
+                       (is (= :inner-1 *test-var*))
+                       (is (= :inner-2 *test-var-2*)))
+                     ;; Both should restore
+                     (is (= :outer *test-var*))
+                     (is (= :outer-2 *test-var-2*))
+                     [*test-var* *test-var-2*])
+                   1000)]
+      (is (= [:outer :outer-2] result) "Should restore all bound vars"))))
+
+(deftest test-binding-with-error
+  (testing "Binding restores even when continuation fails"
+    (let [error-caught (atom nil)]
+      (try
+        (blocking-test
+          (async
+            (try
+              (binding [*test-var* :inner]
+                (await (failing-async "test error"))
+                (is false "Should not reach here"))
+              (catch Exception e
+                (reset! error-caught e)
+                ;; After error, binding should still restore
+                *test-var*)))
+          1000)
+        (catch Exception e
+          (reset! error-caught e)))
+      (is (some? @error-caught) "Should have caught error")
+      (is (= :outer *test-var*) "Should restore binding even after error"))))
+
+(deftest test-binding-across-threads
+  (testing "Binding restoration works across thread boundaries (like inference)"
+    (let [outer-binding :parent-context
+          inner-binding :forked-context
+          result (blocking-test
+                   (async
+                     (binding [*test-var* outer-binding]
+                       ;; Simulate forking to different context
+                       (let [inner-result (binding [*test-var* inner-binding]
+                                            (await (future-delay 10 :data))
+                                            *test-var*)]
+                         (is (= inner-binding inner-result) "Should see inner binding during await")
+                         ;; After inner binding exits, should restore outer
+                         *test-var*)))
+                   1000)]
+      (is (= outer-binding result) "Should restore outer binding after nested binding exits"))))
+
 (defn run-all-tests []
   (run-tests 'is.simm.partial-cps-test))

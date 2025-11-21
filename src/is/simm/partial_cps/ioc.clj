@@ -66,6 +66,49 @@
   ;; that macros don't depend on the values in the &env map.
   (update ctx :env (fnil into {}) (map (fn [sym] [sym true])) syms))
 
+(defn handle-binding-form
+  "Handle binding/with-redefs forms to restore bindings in continuations.
+
+  Intercepts binding forms BEFORE macro expansion to wrap continuations with
+  binding restoration. This ensures that when continuations fire after the
+  binding scope exits, they restore the outer bindings that were active before
+  the binding form was entered."
+  [{:keys [r e env] :as ctx} form]
+  (let [[macro-sym bindings & body] form
+        binding-pairs (partition 2 bindings)
+        var-syms (map first binding-pairs)
+        ;; Generate symbols to save current values
+        saved-syms (map #(gensym (str (name %) "-saved__")) var-syms)
+        ;; Generate wrapped continuation symbols
+        wrapped-r (gensym "binding-restore-r__")
+        wrapped-e (gensym "binding-restore-e__")
+        ;; Use plain 'binding' symbol for restoration (works in both CLJ and CLJS)
+        binding-sym 'binding]
+    (if (has-breakpoints? `(do ~@body) ctx)
+      ;; Body has breakpoints - need to wrap continuations
+      `(let [~@(interleave saved-syms var-syms)
+             ;; Wrapped resolve - restores outer bindings before calling original r
+             ~wrapped-r (fn [val#]
+                          (~binding-sym [~@(interleave var-syms saved-syms)]
+                            (~r val#)))
+             ;; Wrapped reject - restores outer bindings before calling original e
+             ~wrapped-e (fn [err#]
+                          (~binding-sym [~@(interleave var-syms saved-syms)]
+                            (~e err#)))]
+         ;; Transform the EXPANDED binding form with wrapped continuations
+         ~(invert (assoc ctx :r wrapped-r :e wrapped-e)
+                  ;; Expand the binding macro and transform the expansion
+                  (apply (if (:js-globals env)
+                           (resolve (:name (resolve-macro-var-cljs env macro-sym)))
+                           (resolve env macro-sym))
+                         form env (rest form))))
+      ;; No breakpoints in body - just expand normally
+      (recur ctx
+             (apply (if (:js-globals env)
+                      (resolve (:name (resolve-macro-var-cljs env macro-sym)))
+                      (resolve env macro-sym))
+                    form env (rest form))))))
+
 (defn invert
   [{:keys [r             ; symbol of continuation function (resolve)
            e             ; symbol of error handling function (raise)
@@ -80,6 +123,19 @@
     (cond
       (not (has-breakpoints? form ctx))
       `(~r ~form)
+
+      ;; Special handling for binding/with-redefs BEFORE macro expansion
+      (and (symbol? head)
+           (let [head-name (name head)
+                 head-ns (namespace head)]
+             (or (and (= head-name "binding")
+                      (or (= head-ns "clojure.core")
+                          (= head-ns "cljs.core")
+                          (nil? head-ns)))
+                 (and (= head-name "with-redefs")
+                      (or (= head-ns "cljs.core")
+                          (nil? head-ns))))))
+      (handle-binding-form ctx form)
 
       (if (and head (:js-globals env))
         ;; use cljs.analyzer to find macro var info

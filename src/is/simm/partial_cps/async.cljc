@@ -1,7 +1,6 @@
 (ns is.simm.partial-cps.async
   (:refer-clojure :exclude [await])
   (:require [is.simm.partial-cps.runtime :as runtime]
-            #?(:clj [riddley.walk :refer [macroexpand-all]])
             #?(:clj [is.simm.partial-cps.ioc :refer [has-breakpoints? invert]]))
   #?(:cljs (:require-macros [is.simm.partial-cps.async :refer [async doseq-async dotimes-async]])))
 
@@ -91,16 +90,15 @@
      [& body]
      (let [r (gensym) e (gensym)
            params {:r r :e e :env &env :breakpoints breakpoints}
-           expanded (try
-                      (macroexpand-all (cons 'do body))
-                      (catch Exception e
-                        (throw e)))]
+           ;; DON'T use macroexpand-all - let invert handle incremental expansion
+           ;; This allows us to intercept binding/with-redefs before they expand
+           form (cons 'do body)]
        `(fn [~r ~e]
           (try
             (if *in-trampoline*
-              ~(invert params expanded)
+              ~(invert params form)
               (binding [*in-trampoline* true]
-                (loop [result# ~(invert params expanded)]
+                (loop [result# ~(invert params form)]
                   (if (instance? is.simm.partial_cps.runtime.Thunk result#)
                     ;; If continuation returns a thunk, trampoline it
                     (recur ((.-f ^is.simm.partial_cps.runtime.Thunk result#)))
