@@ -2,7 +2,7 @@
   (:refer-clojure :exclude [await])
   (:require [clojure.test :refer [deftest testing is run-tests]]
             [is.simm.partial-cps.runtime :as runtime]
-            [is.simm.partial-cps.async :refer [await async doseq-async dotimes-async *in-trampoline*]]))
+            [is.simm.partial-cps.async :refer [await async *in-trampoline*]]))
 
 ;; Test helpers for Clojure (JVM)
 (defn future-delay
@@ -257,13 +257,13 @@
                   200)]
       (is (= 99 result)))))
 
-;; Test doseq-async
-(deftest test-doseq-async-basic
-  (testing "Basic doseq-async with sequential await operations"
+;; Test doseq
+(deftest test-doseq-basic
+  (testing "Basic doseq with sequential await operations"
     (let [results (atom [])
           result (blocking-test
                   (async
-                    (doseq-async [i [1 2 3]]
+                    (doseq [i [1 2 3]]
                       (let [value (await (future-delay 10 (* i 10)))]
                         (swap! results conj value)))
                     :completed)
@@ -271,12 +271,12 @@
       (is (= :completed result)) ; async block completed
       (is (= [10 20 30] @results)))))
 
-(deftest test-doseq-async-nested
-  (testing "Nested doseq-async with multiple bindings"
+(deftest test-doseq-nested
+  (testing "Nested doseq with multiple bindings"
     (let [results (atom [])
           result (blocking-test
                   (async
-                    (doseq-async [i [1 2] j [:a :b]]
+                    (doseq [i [1 2] j [:a :b]]
                       (let [value (await (future-delay 5 [i j]))]
                         (swap! results conj value)))
                     :completed)
@@ -284,20 +284,20 @@
       (is (= :completed result))
       (is (= [[1 :a] [1 :b] [2 :a] [2 :b]] @results)))))
 
-(deftest test-doseq-async-no-await
-  (testing "doseq-async falls through to regular doseq when no await"
+(deftest test-doseq-no-await
+  (testing "doseq falls through to regular doseq when no await"
     (let [results (atom [])]
-      (doseq-async [i [1 2 3]]
+      (doseq [i [1 2 3]]
         (swap! results conj (* i 10)))
       (is (= [10 20 30] @results)))))
 
-;; Test dotimes-async
-(deftest test-dotimes-async-basic
-  (testing "Basic dotimes-async with sequential await operations"
+;; Test dotimes
+(deftest test-dotimes-basic
+  (testing "Basic dotimes with sequential await operations"
     (let [results (atom [])
           result (blocking-test
                   (async
-                    (dotimes-async [i 3]
+                    (dotimes [i 3]
                       (let [value (await (future-delay 10 (* i 100)))]
                         (swap! results conj value)))
                     :completed) ; Return a completion marker
@@ -305,20 +305,20 @@
       (is (= :completed result)) ; async block completed
       (is (= [0 100 200] @results)))))
 
-(deftest test-dotimes-async-no-await
-  (testing "dotimes-async falls through to regular dotimes when no await"
+(deftest test-dotimes-no-await
+  (testing "dotimes falls through to regular dotimes when no await"
     (let [results (atom [])]
-      (dotimes-async [i 3]
+      (dotimes [i 3]
         (swap! results conj (* i 100)))
       (is (= [0 100 200] @results)))))
 
 (deftest test-mixed-async-loops
-  (testing "Combining doseq-async and dotimes-async"
+  (testing "Combining doseq and dotimes"
     (let [results (atom [])
           result (blocking-test
                   (async
-                    (doseq-async [letter [:a :b]]
-                      (dotimes-async [i 2]
+                    (doseq [letter [:a :b]]
+                      (dotimes [i 2]
                         (let [value (await (future-delay 5 [letter i]))]
                           (swap! results conj value))))
                     :completed)
@@ -326,13 +326,13 @@
       (is (= :completed result))
       (is (= [[:a 0] [:a 1] [:b 0] [:b 1]] @results)))))
 
-(deftest test-doseq-async-with-await-in-binding
-  (testing "doseq-async with await in collection binding"
+(deftest test-doseq-with-await-in-binding
+  (testing "doseq with await in collection binding"
     (let [results (atom [])
           result (blocking-test
                   (async
                     ;; Await a collection in the binding itself
-                    (doseq-async [i (await (future-delay 20 [1 2 3]))]
+                    (doseq [i (await (future-delay 20 [1 2 3]))]
                       (let [value (await (future-delay 10 (* i 10)))]
                         (swap! results conj value)))
                     :completed)
@@ -340,13 +340,13 @@
       (is (= :completed result))
       (is (= [10 20 30] @results)))))
 
-(deftest test-doseq-async-mixed-sync-async-bindings
-  (testing "doseq-async with mix of sync and async bindings"
+(deftest test-doseq-mixed-sync-async-bindings
+  (testing "doseq with mix of sync and async bindings"
     (let [results (atom [])
           result (blocking-test
                   (async
                     ;; Mix sync collection with async collection
-                    (doseq-async [letter [:x :y]
+                    (doseq [letter [:x :y]
                                   i (await (future-delay 20 [1 2]))]
                       (let [value (await (future-delay 10 [letter i]))]
                         (swap! results conj value)))

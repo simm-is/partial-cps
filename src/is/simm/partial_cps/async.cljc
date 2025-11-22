@@ -2,7 +2,7 @@
   (:refer-clojure :exclude [await])
   (:require [is.simm.partial-cps.runtime :as runtime]
             #?(:clj [is.simm.partial-cps.ioc :refer [has-breakpoints? invert]]))
-  #?(:cljs (:require-macros [is.simm.partial-cps.async :refer [async doseq-async dotimes-async]])))
+  #?(:cljs (:require-macros [is.simm.partial-cps.async :refer [async]])))
 
 (defn await
   "Awaits the asynchronous execution of continuation-passing style function
@@ -90,8 +90,6 @@
      [& body]
      (let [r (gensym) e (gensym)
            params {:r r :e e :env &env :breakpoints breakpoints}
-           ;; DON'T use macroexpand-all - let invert handle incremental expansion
-           ;; This allows us to intercept binding/with-redefs before they expand
            form (cons 'do body)]
        `(fn [~r ~e]
           (try
@@ -104,84 +102,3 @@
                     (recur ((.-f ^is.simm.partial_cps.runtime.Thunk result#)))
                     result#))))
             (catch ~(if (:js-globals &env) :default `Throwable) t# (~e t#)))))))
-
-;; experimental macros
-
-#?(:clj
-   (defmacro doseq-async
-     "Asynchronous doseq that properly handles await operations in bindings or body.
-   Processes items sequentially, waiting for each async operation to complete
-   before moving to the next item. Must be used within an async block."
-     [bindings & body]
-     (let [binding-pairs (partition 2 bindings)
-           ctx {:breakpoints breakpoints :env &env}]
-       (letfn [(expand-doseq [pairs]
-                 (if (seq pairs)
-                   (let [[sym coll] (first pairs)
-                         rest-pairs (rest pairs)]
-                     `(let [coll# (seq ~coll)]
-                        (loop [items# coll#]
-                          (when items#
-                            (let [~sym (first items#)]
-                              ~(if (seq rest-pairs)
-                                 (expand-doseq rest-pairs)
-                                 `(do ~@body))
-                              (recur (next items#)))))))
-                   `(do ~@body)))]
-
-         ;; Check if bindings contain await operations
-         (if (has-breakpoints? bindings ctx)
-           ;; Bindings contain await - expand to nested let/doseq structure that CPS will transform
-           (let [[syncs [[sym asn] & others]] (split-with #(not (has-breakpoints? (second %) ctx)) binding-pairs)]
-             (if asn
-               ;; First async binding found - await the collection, then continue processing
-               (let [async-coll-sym (gensym "async-coll")]
-                 (if (seq others)
-                   ;; More bindings to handle - use recursive doseq-async call
-                   `(let [~async-coll-sym ~asn]
-                      ~(if (seq syncs)
-                         `(doseq [~@(mapcat identity syncs) ~sym ~async-coll-sym]
-                            (doseq-async [~@(mapcat identity others)]
-                              ~@body))
-                         `(doseq [~sym ~async-coll-sym]
-                            (doseq-async [~@(mapcat identity others)]
-                              ~@body))))
-                   ;; No more bindings - check if body has async operations
-                   (if (has-breakpoints? `(do ~@body) ctx)
-                     ;; Body has async - expand to loop/recur structure  
-                     `(let [~async-coll-sym ~asn]
-                        ~(expand-doseq (concat syncs [[sym async-coll-sym]])))
-                     ;; No more async operations - use regular doseq
-                     `(let [~async-coll-sym ~asn]
-                        ~(if (seq syncs)
-                           `(doseq [~@(mapcat identity syncs) ~sym ~async-coll-sym]
-                              ~@body)
-                           `(doseq [~sym ~async-coll-sym]
-                              ~@body))))))
-               ;; No async bindings after all - check body
-               (if (has-breakpoints? `(do ~@body) ctx)
-                 (expand-doseq binding-pairs)
-                 `(doseq ~bindings ~@body))))
-           ;; No async in bindings - check body
-           (if (has-breakpoints? `(do ~@body) ctx)
-             ;; Body contains await - convert to explicit loop/recur that will be CPS-transformed
-             (expand-doseq binding-pairs)
-             ;; No async operations - use regular doseq
-             `(doseq ~bindings ~@body)))))))
-
-#?(:clj
-   (defmacro dotimes-async
-     "Asynchronous dotimes that properly handles await operations in the body.
-   Processes iterations sequentially, waiting for each async operation to complete
-   before moving to the next iteration."
-     [[sym init-form] & body]
-     (let [ctx {:breakpoints breakpoints :env &env}]
-       (if (has-breakpoints? `(do ~@body) ctx)
-         ;; Body contains await - generate loop that will be CPS-transformed
-         `(let [max# ~init-form]
-            (loop [~sym 0]
-              (when (< ~sym max#)
-                ~@body
-                (recur (inc ~sym)))))
-         ;; No await in body, pass through unchanged
-         `(dotimes [~sym ~init-form] ~@body)))))
