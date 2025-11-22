@@ -458,5 +458,74 @@
                    1000)]
       (is (= outer-binding result) "Should restore outer binding after nested binding exits"))))
 
+;; =============================================================================
+;; Macro Breakpoint Detection Tests
+;; =============================================================================
+;; These tests verify that has-breakpoints? correctly detects breakpoints
+;; hidden inside macro expansions. Without proper macro expansion in
+;; has-breakpoints?, these tests will fail because the CPS transformation
+;; won't recognize that the macros contain await calls.
+
+(defmacro async-helper
+  "Macro that expands to code containing await - tests has-breakpoints? detection"
+  [delay-ms value]
+  `(await (future-delay ~delay-ms (* ~value 2))))
+
+(defmacro nested-async-ops
+  "Macro with multiple await calls in expansion"
+  [x y]
+  `(let [a# (await (future-delay 10 ~x))
+         b# (await (future-delay 10 ~y))]
+     (+ a# b#)))
+
+(defmacro outer-macro
+  "Macro that calls another macro containing await"
+  [x]
+  `(let [inner# (async-helper 10 ~x)]
+     (+ inner# 1)))
+
+(deftest test-macro-with-breakpoint-simple
+  (testing "has-breakpoints? detects await inside simple macro"
+    (let [result (blocking-test
+                   (async
+                     (async-helper 20 5))
+                   500)]
+      (is (= 10 result) "Macro containing await should be CPS-transformed correctly"))))
+
+(deftest test-macro-with-multiple-breakpoints
+  (testing "has-breakpoints? detects multiple awaits inside macro"
+    (let [result (blocking-test
+                   (async
+                     (nested-async-ops 3 7))
+                   500)]
+      (is (= 10 result) "Macro with multiple awaits should be CPS-transformed correctly"))))
+
+(deftest test-macro-in-let-binding
+  (testing "Macro with breakpoints in let binding position"
+    (let [result (blocking-test
+                   (async
+                     (let [x (async-helper 20 3)]
+                       (* x 3)))
+                   500)]
+      (is (= 18 result) "Macro in let binding should work correctly"))))
+
+(deftest test-macro-in-conditional
+  (testing "Macro with breakpoints in conditional branches"
+    (let [result (blocking-test
+                   (async
+                     (if true
+                       (async-helper 20 4)
+                       (async-helper 20 8)))
+                   500)]
+      (is (= 8 result) "Macro in conditional should work correctly"))))
+
+(deftest test-nested-macros-with-breakpoints
+  (testing "Nested macro calls both containing breakpoints"
+    (let [result (blocking-test
+                   (async
+                     (outer-macro 5))
+                   500)]
+      (is (= 11 result) "Nested macros with breakpoints should work correctly"))))
+
 (defn run-all-tests []
   (run-tests 'is.simm.partial-cps-test))

@@ -32,13 +32,34 @@
         has-term? (contains? breakpoints resolved-sym)
         is-nested-async? (or (= resolved-sym 'is.simm.partial-cps.async/async)
                              (= sym 'is.simm.partial-cps.async/async))]
-    (cond has-term? true
-          (and recur-target (= 'recur sym)) true
-          ;; Don't recurse into nested async blocks - they handle their own breakpoints
-          is-nested-async? false
-          (= 'loop* sym) (some #(has-breakpoints? % (dissoc ctx :recur-target)) (rest form))
-          (coll? form) (some #(has-breakpoints? % ctx) form)
-          :else false)))
+    (cond
+      has-term? true
+
+      (and recur-target (= 'recur sym)) true
+
+      ;; Don't recurse into nested async blocks - they handle their own breakpoints
+      is-nested-async? false
+
+      ;; Check if this is a macro - if so, expand and check the expansion
+      (and (seq? form)
+           (symbol? sym)
+           (if (:js-globals env)
+             ;; ClojureScript: use cljs.analyzer
+             (:macro (resolve-macro-var-cljs env sym))
+             ;; Clojure: use normal resolve
+             (let [resolved (resolve env sym)]
+               (and resolved (.isMacro resolved)))))
+      (let [expanded (apply (if (:js-globals env)
+                              (resolve (:name (resolve-macro-var-cljs env sym)))
+                              (resolve env sym))
+                            form env (rest form))]
+        (has-breakpoints? expanded ctx))
+
+      (= 'loop* sym) (some #(has-breakpoints? % (dissoc ctx :recur-target)) (rest form))
+
+      (coll? form) (some #(has-breakpoints? % ctx) form)
+
+      :else false)))
 
 (defn can-inline?
   [form]
