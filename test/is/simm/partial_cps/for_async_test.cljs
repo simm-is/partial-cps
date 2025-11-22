@@ -145,9 +145,17 @@
      (fn [err] (is false (str "Unexpected error: " err)) (done)))))
 
 ;; Await in various positions
-;; NOTE: ClojureScript has issues with nested macro expansion when await is used
-;; in modifiers (:when, :while) or sequence expressions. These tests work in Clojure
-;; but are commented out for ClojureScript. See Clojure version of tests for full coverage.
+;; NOTE: ClojureScript compiler bug - when `await` (or any function call) appears
+;; inside :when/:while modifiers, the ClojureScript analyzer replaces the binding
+;; vector with a gensym before the `for` macro expansion, causing:
+;;   UnsupportedOperationException: count not supported on this type: Symbol
+;;
+;; Root cause: ClojureScript's code analyzer transforms nested macro contexts
+;; (test/async → async → for) in a way that corrupts the binding vector structure.
+;; The binding vector [x coll :when (await ...)] becomes a Symbol (e.g., G__9722).
+;;
+;; These tests work perfectly in Clojure. See for_async_test.clj for full coverage.
+;; Workaround: Pre-evaluate await outside the for comprehension.
 
 #_(deftest test-for-await-in-when
   (test/async done
