@@ -25,9 +25,38 @@
                 nsp (.getName ^clojure.lang.Namespace (:ns (meta v)))]
             (symbol (name nsp) (name nm))))))))
 
+(defn expand-macro
+  "Expand a macro form if it's actually a macro. Returns [expanded changed?]"
+  [form env]
+  (when (and (seq? form) (symbol? (first form)))
+    (let [sym (first form)]
+      (if (:js-globals env)
+        ;; ClojureScript
+        (when (:macro (resolve-macro-var-cljs env sym))
+          (let [expanded (apply (resolve (:name (resolve-macro-var-cljs env sym)))
+                               form env (rest form))]
+            [expanded true]))
+        ;; Clojure
+        (when-let [resolved (resolve env sym)]
+          (when (.isMacro resolved)
+            (let [expanded (apply resolved form env (rest form))]
+              [expanded true])))))))
+
 (defn has-breakpoints?
-  [form {:keys [breakpoints recur-target env] :as ctx}]
-  (let [sym (when (seq? form) (first form))
+  [form {:keys [breakpoints recur-target env expansion-cache] :as ctx}]
+  ;; Check cache first, then expand if needed
+  (let [[form-to-check ctx'] (if-let [cached (when expansion-cache (get @expansion-cache form))]
+                                [cached ctx]
+                                ;; Not in cache, try to expand
+                                (if-let [[expanded _] (expand-macro form env)]
+                                  (do
+                                    (when expansion-cache
+                                      (swap! expansion-cache assoc form expanded))
+                                    ;; Recursively check the expansion
+                                    [expanded ctx])
+                                  ;; Not a macro, use form as-is
+                                  [form ctx]))
+        sym (when (seq? form-to-check) (first form-to-check))
         resolved-sym (var-name env sym)
         has-term? (contains? breakpoints resolved-sym)
         is-nested-async? (or (= resolved-sym 'is.simm.partial-cps.async/async)
@@ -40,24 +69,13 @@
       ;; Don't recurse into nested async blocks - they handle their own breakpoints
       is-nested-async? false
 
-      ;; Check if this is a macro - if so, expand and check the expansion
-      (and (seq? form)
-           (symbol? sym)
-           (if (:js-globals env)
-             ;; ClojureScript: use cljs.analyzer
-             (:macro (resolve-macro-var-cljs env sym))
-             ;; Clojure: use normal resolve
-             (let [resolved (resolve env sym)]
-               (and resolved (.isMacro resolved)))))
-      (let [expanded (apply (if (:js-globals env)
-                              (resolve (:name (resolve-macro-var-cljs env sym)))
-                              (resolve env sym))
-                            form env (rest form))]
-        (has-breakpoints? expanded ctx))
+      ;; If we just expanded this form and it's different, recurse to check the expansion
+      (and (not= form form-to-check) (not has-term?) (not is-nested-async?))
+      (has-breakpoints? form-to-check ctx')
 
-      (= 'loop* sym) (some #(has-breakpoints? % (dissoc ctx :recur-target)) (rest form))
+      (= 'loop* sym) (some #(has-breakpoints? % (dissoc ctx' :recur-target)) (rest form-to-check))
 
-      (coll? form) (some #(has-breakpoints? % ctx) form)
+      (coll? form-to-check) (some #(has-breakpoints? % ctx') form-to-check)
 
       :else false)))
 
@@ -134,13 +152,15 @@
                       (resolve env macro-sym))
                     form env (rest form))))))
 
-(defn invert
+(defn invert-impl
+  "Internal implementation of invert. Assumes expansion-map is already in ctx."
   [{:keys [r             ; symbol of continuation function (resolve)
            e             ; symbol of error handling function (raise)
            sync-recur?   ; indicates when synchronous recur is possible
            recur-target  ; symbol of asynchronous recur function if any
            breakpoints   ; map of symbols that break flow to symbols of handlers
-           env]          ; the current macroexpansion environment
+           env           ; the current macroexpansion environment
+           expansion-map] ; map of original forms to their expansions
     :as ctx}
    form]
   (let [[head & tail] (when (seq? form) form)
@@ -162,6 +182,7 @@
                           (nil? head-ns))))))
       (handle-binding-form ctx form)
 
+      ;; Check if this is a macro and expand it
       (if (and head (:js-globals env))
         ;; use cljs.analyzer to find macro var info
         (:macro (resolve-macro-var-cljs env head))
@@ -185,17 +206,17 @@
               cont (gensym "cont")]
           (if (has-breakpoints? con ctx)
             (let [ctx' (dissoc ctx :sync-recur?)]
-              `(letfn [(~cont [con#] (if con# ~(invert ctx' left)
-                                         ~(invert ctx' right)
+              `(letfn [(~cont [con#] (if con# ~(invert-impl ctx' left)
+                                         ~(invert-impl ctx' right)
                                          ~@unexpected-others))]
-                 ~(invert (assoc ctx :r cont) con)))
-            `(if ~con ~(invert ctx left) ~(invert ctx right))))
+                 ~(invert-impl (assoc ctx :r cont) con)))
+            `(if ~con ~(invert-impl ctx left) ~(invert-impl ctx right))))
 
         case*
         (let [[ge shift mask default imap & args] tail
-              imap (reduce-kv #(assoc %1 %2 (update %3 1 (fn [v] (invert ctx v))))
+              imap (reduce-kv #(assoc %1 %2 (update %3 1 (fn [v] (invert-impl ctx v))))
                               {} imap)]
-          `(case* ~ge ~shift ~mask ~(invert ctx default) ~imap ~@args))
+          `(case* ~ge ~shift ~mask ~(invert-impl ctx default) ~imap ~@args))
 
         let*
         (let [bindings-vec (first tail)
@@ -208,20 +229,20 @@
                                `(let* [~@(mapcat identity syncs)]
                                       (letfn [(~cont [async-value#]
                                                 (let* [~sym async-value#]
-                                                      ~(invert (add-env-syms (dissoc updated-ctx :sync-recur?) [sym])
+                                                      ~(invert-impl (add-env-syms (dissoc updated-ctx :sync-recur?) [sym])
                                                                (if (seq others)
                                                                  `(let* [~@(mapcat identity others)]
                                                                         ~@(rest tail))
                                                                  `(do ~@(rest tail))))))]
-                                        ~(invert (assoc updated-ctx :r cont) asn)))
+                                        ~(invert-impl (assoc updated-ctx :r cont) asn)))
                                ;; No async bindings
                                `(let* [~@(mapcat identity syncs)]
-                                      ~(invert updated-ctx `(do ~@(rest tail)))))]
+                                      ~(invert-impl updated-ctx `(do ~@(rest tail)))))]
           generated-form)
 
         letfn*
         `(letfn* ~(first tail)
-                 ~(invert (add-env-syms ctx (->> tail first (partition 2) (map first)))
+                 ~(invert-impl (add-env-syms ctx (->> tail first (partition 2) (map first)))
                           `(do ~@(rest tail))))
 
         do
@@ -230,10 +251,10 @@
           (if asn
             `(do ~@syncs
                  ~(if others
-                    `(letfn [(~cont [_#] ~(invert (dissoc ctx :sync-recur?)
+                    `(letfn [(~cont [_#] ~(invert-impl (dissoc ctx :sync-recur?)
                                                   `(do ~@others)))]
-                       ~(invert (assoc ctx :r cont) asn))
-                    (invert ctx asn)))
+                       ~(invert-impl (assoc ctx :r cont) asn))
+                    (invert-impl ctx asn)))
             `(~r ~form)))
 
         loop*
@@ -241,7 +262,7 @@
               bind-names (->> binds (partition 2) (map first))]
           (cond
             (has-breakpoints? binds ctx)
-            (invert ctx `(let [~@binds]
+            (invert-impl ctx `(let [~@binds]
                            (loop [~@(interleave bind-names bind-names)]
                              ~@body)))
 
@@ -250,7 +271,7 @@
                   updated-ctx (add-env-syms ctx bind-names)]
               `(letfn [(~recur-target [~@bind-names]
                          (loop [~@(interleave bind-names bind-names)]
-                           ~(invert (assoc updated-ctx
+                           ~(invert-impl (assoc updated-ctx
                                            :sync-recur? true
                                            :recur-target recur-target)
                                     `(do ~@body))))]
@@ -283,7 +304,7 @@
               cat (gensym "catch")
               v (gensym) t (gensym)]
           `(letfn [(~fin-do [~v ~t]
-                     (try ~(invert ctx `(do ~@finally (if ~t (throw ~t) ~v)))
+                     (try ~(invert-impl ctx `(do ~@finally (if ~t (throw ~t) ~v)))
                           (catch ~all-ex t# (~e t#))))
                    (~fin [v#] (~fin-do v# nil))
                    (~fin-throw [t#] (~fin-do nil t#))
@@ -292,11 +313,11 @@
                        (try (throw t#)
                             ~@(map (fn [[sym cls bnd & body]]
                                      `(~sym ~cls ~bnd
-                                            ~(invert (assoc (add-env-syms ctx [bnd]) :r fin :e fin-throw)
+                                            ~(invert-impl (assoc (add-env-syms ctx [bnd]) :r fin :e fin-throw)
                                                      `(do ~@body))))
                                    catches))
                        (catch ~all-ex t# (~fin-do nil t#))))]
-             (try ~(invert (assoc ctx :r fin :e cat) `(do ~@body))
+             (try ~(invert-impl (assoc ctx :r fin :e cat) `(do ~@body))
                   (catch ~all-ex t# (~cat t#)))))
 
         throw
@@ -357,3 +378,12 @@
 
       :else (throw (ex-info (str "Unsupported form [" form "]")
                             {:form form})))))
+
+(defn invert
+  "CPS inversion with macro expansion caching.
+   Creates an expansion cache atom that persists across has-breakpoints? calls
+   to avoid re-expanding the same macros multiple times."
+  [ctx form]
+  (let [expansion-cache (atom {})
+        ctx-with-cache (assoc ctx :expansion-cache expansion-cache)]
+    (invert-impl ctx-with-cache form)))
