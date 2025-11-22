@@ -29,9 +29,13 @@
   [form {:keys [breakpoints recur-target env] :as ctx}]
   (let [sym (when (seq? form) (first form))
         resolved-sym (var-name env sym)
-        has-term? (contains? breakpoints resolved-sym)]
+        has-term? (contains? breakpoints resolved-sym)
+        is-nested-async? (or (= resolved-sym 'is.simm.partial-cps.async/async)
+                             (= sym 'is.simm.partial-cps.async/async))]
     (cond has-term? true
           (and recur-target (= 'recur sym)) true
+          ;; Don't recurse into nested async blocks - they handle their own breakpoints
+          is-nested-async? false
           (= 'loop* sym) (some #(has-breakpoints? % (dissoc ctx :recur-target)) (rest form))
           (coll? form) (some #(has-breakpoints? % ctx) form)
           :else false)))

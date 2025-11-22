@@ -3,7 +3,7 @@
   (:require [cljs.test :as test :refer-macros [deftest testing is]]
             [is.simm.partial-cps.sequence :as seq]
             [is.simm.partial-cps.async :refer [await]])
-  (:require-macros [is.simm.partial-cps.async :refer [async doseq-async dotimes-async]]))
+  (:require-macros [is.simm.partial-cps.async :refer [async]]))
 
 ;; Test helpers for ClojureScript
 (defn async-cb-delay

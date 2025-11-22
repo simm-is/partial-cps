@@ -2,8 +2,9 @@
   (:require [cljs.test :as test :refer-macros [deftest testing is]]
             [is.simm.partial-cps.async :refer [await]]
             [clojure.pprint :refer [pprint]]
-            [is.simm.partial-cps.sequence-test :as sequence])
-  (:require-macros [is.simm.partial-cps.async :refer [async doseq-async dotimes-async]]))
+            [is.simm.partial-cps.sequence-test :as sequence]
+            [is.simm.partial-cps.for-async-test :as for-async])
+  (:require-macros [is.simm.partial-cps.async :refer [async]]))
 
 ;; Test helpers
 (defn promise-delay
@@ -123,77 +124,6 @@
      (fn [_v] (done))
      (fn [err] (is false (str "Unexpected error: " err)) (done)))))
 
-;; Collection operations
-(deftest test-doseq-async
-  (test/async done
-    ((async
-      (let [results (atom [])]
-        (doseq-async [i [1 2 3]]
-          (let [value (await (async-cb-delay 10 (* i 10)))]
-            (swap! results conj value)))
-        (is (= [10 20 30] @results))))
-     (fn [_v] (done))
-     (fn [err] (is false (str "Unexpected error: " err)) (done)))))
-
-(deftest test-dotimes-async
-  (test/async done
-    ((async
-      (let [counter (atom 0)]
-        (dotimes-async [i 3]
-          (await (async-cb-delay 10 nil))
-          (swap! counter inc))
-        (is (= 3 @counter))))
-     (fn [_v] (done))
-     (fn [err] (is false (str "Unexpected error: " err)) (done)))))
-
-;; Additional async loop tests
-(deftest test-doseq-async-nested
-  (test/async done
-    ((async
-      (let [results (atom [])]
-        (doseq-async [i [1 2] j [:a :b]]
-          (let [value (await (async-cb-delay 5 [i j]))]
-            (swap! results conj value)))
-        (is (= [[1 :a] [1 :b] [2 :a] [2 :b]] @results))))
-     (fn [_v] (done))
-     (fn [err] (is false (str "Unexpected error: " err)) (done)))))
-
-(deftest test-mixed-async-loops
-  (test/async done
-    ((async
-      (let [results (atom [])]
-        (doseq-async [letter [:x :y]]
-          (dotimes-async [i 2]
-            (let [value (await (async-cb-delay 5 [letter i]))]
-              (swap! results conj value))))
-        (is (= [[:x 0] [:x 1] [:y 0] [:y 1]] @results))))
-     (fn [_v] (done))
-     (fn [err] (is false (str "Unexpected error: " err)) (done)))))
-
-(deftest test-doseq-async-no-await
-  (test/async done
-    ((async
-      (let [results (atom [])]
-        ;; This should fall through to regular doseq (synchronous)
-        (doseq-async [i [1 2 3]]
-          (swap! results conj (* i 10)))
-        ;; Since it's synchronous, results should be immediately available
-        (is (= [10 20 30] @results))))
-     (fn [_v] (done))
-     (fn [err] (is false (str "Unexpected error: " err)) (done)))))
-
-(deftest test-dotimes-async-no-await
-  (test/async done
-    ((async
-      (let [results (atom [])]
-        ;; This should fall through to regular dotimes (synchronous)
-        (dotimes-async [i 3]
-          (swap! results conj (* i 100)))
-        ;; Since it's synchronous, results should be immediately available
-        (is (= [0 100 200] @results))))
-     (fn [_v] (done))
-     (fn [err] (is false (str "Unexpected error: " err)) (done)))))
-
 ;; Complex control flow
 (deftest test-complex-control-flow
   (test/async done
@@ -223,33 +153,8 @@
      (fn [_v] (done))
      (fn [err] (is false (str "Unexpected error: " err)) (done)))))
 
-;; Async bindings tests
-(deftest test-doseq-async-with-await-in-binding
-  (test/async done
-    ((async
-      (let [results (atom [])]
-        ;; Await a collection in the binding itself
-        (doseq-async [i (await (async-cb-delay 20 [1 2 3]))]
-          (let [value (await (async-cb-delay 10 (* i 10)))]
-            (swap! results conj value)))
-        (is (= [10 20 30] @results))))
-     (fn [_v] (done))
-     (fn [err] (is false (str "Unexpected error: " err)) (done)))))
-
-(deftest test-doseq-async-mixed-sync-async-bindings
-  (test/async done
-    ((async
-      (let [results (atom [])]
-        ;; Mix sync collection with async collection
-        (doseq-async [letter [:x :y]
-                      i (await (async-cb-delay 20 [1 2]))]
-          (let [value (await (async-cb-delay 10 [letter i]))]
-            (swap! results conj value)))
-        (is (= [[:x 1] [:x 2] [:y 1] [:y 2]] @results))))
-     (fn [_v] (done))
-     (fn [err] (is false (str "Unexpected error: " err)) (done)))))
-
 ;; Test runner
 (defn ^:export run-tests []
   (test/run-tests 'is.simm.partial-cps.async-test)
-  (test/run-tests 'is.simm.partial-cps.sequence-test))
+  (test/run-tests 'is.simm.partial-cps.sequence-test)
+  (test/run-tests 'is.simm.partial-cps.for-async-test))

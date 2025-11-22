@@ -1,6 +1,7 @@
 (ns is.simm.partial-cps.sequence
   (:refer-clojure :exclude [await first rest sequence transduce into for])
-  (:require [is.simm.partial-cps.async :refer [async await]]))
+  (:require [is.simm.partial-cps.async :refer [#?(:clj async) await]])
+  #?(:cljs (:require-macros [is.simm.partial-cps.async :refer [async]])))
 
 (defprotocol PAsyncSeq
   "Protocol for asynchronous sequences.
@@ -183,7 +184,8 @@
   [generator-fn initial-state]
   (->GeneratorSeq generator-fn initial-state))
 
-(defmacro for
+#?(:clj
+   (defmacro for
   "Async sequence comprehension. Takes a vector of one or more
   binding-form/collection-expr pairs, each followed by zero or more
   modifiers, and yields a lazy async sequence of evaluations of expr.
@@ -211,7 +213,6 @@
           y [:a :b]]
       [x y])  ; Cross-product: [1 :a] [1 :b] [2 :a] ..."
   [seq-exprs body-expr]
-  (assert (vector? seq-exprs) "for requires a vector for its binding")
   (assert (even? (clojure.core/count seq-exprs)) "for requires an even number of forms in binding vector")
 
   (let [;; Group bindings with their modifiers
@@ -257,7 +258,7 @@
               (loop [~xs-sym ~items-sym]
                 (when-let [~xs-sym (seq ~xs-sym)]
                   (let [~bind (clojure.core/first ~xs-sym)
-                        ~result-sym ~(process-modifiers mod-pairs `[~body-expr (clojure.core/rest ~xs-sym)])]
+                        ~result-sym ~(process-modifiers mod-pairs (vector body-expr `(clojure.core/rest ~xs-sym)))]
                     (if ~result-sym
                       ~result-sym
                       (recur (clojure.core/rest ~xs-sym))))))))  ; :when filtered, try next
@@ -331,12 +332,12 @@
                           (when-let [~xs-sym (seq ~xs-sym)]
                             (let [~bind (clojure.core/first ~xs-sym)
                                   ~result-sym ~(process-modifiers mod-pairs
-                                                 `[~body-expr (clojure.core/rest ~xs-sym)]
+                                                 (vector body-expr `(clojure.core/rest ~xs-sym))
                                                  nil)]
                               (if ~result-sym
                                 ~result-sym
                                 (recur (clojure.core/rest ~xs-sym))))))))
                     ~expr))))]
 
-        (emit-nested groups)))))
+        (emit-nested groups))))))
 

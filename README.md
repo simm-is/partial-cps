@@ -7,7 +7,8 @@ The transformed code is also usually faster than more invasive transforms (ANF, 
 ## Features
 
 - **Async/Await**: Write asynchronous code that looks synchronous
-- **Async Sequences**: Lazy async sequences with transducer support
+- **Transparent Iteration**: Standard `doseq`, `dotimes`, and `while` work with `await` automatically
+- **Async Sequences**: Lazy async sequences with transducer support and `for` comprehension
 - **Custom Coroutines**: Build your own control flow primitives with breakpoints
 - **Cross-platform**: Works seamlessly with both Clojure and ClojureScript
 - **Lightweight**: Minimal dependencies and overhead
@@ -63,24 +64,60 @@ Errors propagate naturally through the async chain:
     (handle-recovery error)))
 ```
 
-### Async Control Flow
+### Iteration with Async Operations
 
-The library provides async versions of common control flow constructs:
+Standard Clojure iteration macros work transparently with async operations:
 
 ```clojure
-(require '[is.simm.partial-cps.async :refer [doseq-async dotimes-async]])
-
-;; Process items sequentially with async operations
+;; doseq - process items sequentially
 (async
-  (doseq-async [item (await fetch-items)]
+  (doseq [item (await fetch-items)]
     (println "Processing:" item)
     (await (process-item item))))
 
-;; Async iterations
+;; doseq with modifiers (:let, :when, :while)
 (async
-  (dotimes-async [i 5]
+  (doseq [x [1 2 3 4 5]
+          :when (even? x)
+          :let [doubled (* x 2)]]
+    (await (save-value doubled))))
+
+;; dotimes - counted iteration
+(async
+  (dotimes [i 5]
     (println "Iteration" i)
     (await (delay-ms 1000))))
+
+;; while - conditional iteration
+(async
+  (while (< @counter 10)
+    (let [result (await (fetch-next))]
+      (swap! counter inc)
+      (process result))))
+```
+
+### Async Sequence Comprehension
+
+For lazy async sequences, use `seq/for`:
+
+```clojure
+(require '[is.simm.partial-cps.sequence :as seq])
+
+;; Create lazy async sequence
+(async
+  (let [results (seq/for [item (await fetch-items)]
+                  (await (process-item item)))]
+    ;; Consume the lazy sequence
+    (await (seq/into [] results))))
+
+;; Nested iteration with modifiers
+(async
+  (let [pairs (seq/for [x [1 2 3]
+                        y [10 20 30]
+                        :when (even? (+ x y))
+                        :let [sum (+ x y)]]
+                (await (process sum)))]
+    (await (seq/into [] pairs))))
 ```
 
 ### Async Sequences
@@ -90,17 +127,13 @@ Work with lazy, asynchronous data streams using transducers:
 ```clojure
 (require '[is.simm.partial-cps.sequence :as seq])
 
-;; Define an async sequence
+;; Define an async sequence using PAsyncSeq protocol
 (defrecord AsyncRange [start end]
-  seq/IAsyncSeq
-  (-afirst [_] 
-    (async 
-      (when (< start end)
-        start)))
-  (-arest [_]
+  seq/PAsyncSeq
+  (anext [_]
     (async
       (when (< start end)
-        (->AsyncRange (inc start) end)))))
+        [start (->AsyncRange (inc start) end)]))))
 
 ;; Use transducers with async sequences
 (async
@@ -108,12 +141,12 @@ Work with lazy, asynchronous data streams using transducers:
     ;; Eagerly process with transduce
     (let [sum (await (seq/transduce (map inc) + 0 async-seq))]
       (println "Sum:" sum))
-    
+
     ;; Lazily transform with sequence
-    (let [transformed (seq/sequence 
-                        (comp (filter even?) 
+    (let [transformed (seq/sequence
+                        (comp (filter even?)
                               (map #(* % 2))
-                              (take 5)) 
+                              (take 5))
                         async-seq)
           result (await (seq/into [] transformed))]
       (println "Transformed:" result))))
@@ -255,15 +288,13 @@ The library integrates well with standard test frameworks:
 - `(async & body)` - Create an async function
 - `(await async-op)` - Await an async operation (must be inside async)
 - `(async-fn success-fn error-fn)` - Execute an async function
-- `(doseq-async bindings & body)` - Async version of doseq
-- `(dotimes-async bindings & body)` - Async version of dotimes
 
 ### Sequences (`is.simm.partial-cps.sequence`)
-- `IAsyncSeq` - Protocol for async sequences
-  - `(-afirst this)` - Return async expression yielding first element
-  - `(-arest this)` - Return async expression yielding rest
-- `(first async-seq)` - Get first element
-- `(rest async-seq)` - Get rest of sequence
+- `PAsyncSeq` - Protocol for async sequences
+  - `(anext this)` - Return async expression yielding `[value rest-seq]` or nil if exhausted
+- `(first async-seq)` - Get first element (async)
+- `(rest async-seq)` - Get rest of sequence (async)
+- `(for bindings & body)` - Async sequence comprehension, supports `:let`, `:when`, `:while` modifiers
 - `(transduce xform f init async-seq)` - Eagerly transduce
 - `(into to xform? async-seq)` - Pour into collection
 - `(sequence xform async-seq)` - Lazy transformation
@@ -309,7 +340,7 @@ clojure -M:repl-mcp
 Contributions are welcome! Please feel free to submit issues and pull requests.
 
 Areas of interest:
-- Additional async control flow macros
+- Additional async sequence operations and combinators
 - Performance optimizations
 - Documentation and examples
 - Integration with more async libraries
