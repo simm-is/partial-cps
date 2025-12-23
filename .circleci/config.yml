@@ -32,7 +32,7 @@ jobs:
           root: /home/circleci/
           paths:
             - .m2
-            - simm-is
+            - project
 
   format-check:
     executor: tools/clojurecli
@@ -64,7 +64,7 @@ jobs:
       - persist_to_workspace:
           root: /home/circleci/
           paths:
-            - simm-is
+            - project
 
   deploy:
     executor: tools/clojurecli
