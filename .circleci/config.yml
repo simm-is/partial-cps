@@ -1,0 +1,105 @@
+version: 2.1
+
+orbs:
+  tools: replikativ/clj-tools@0
+
+jobs:
+  setup:
+    executor: tools/clojurecli
+    steps:
+      - restore_cache:
+          keys:
+            - source-{{ .Branch }}-{{ .Revision }}
+            - source-{{ .Branch }}
+            - source-
+      - checkout
+      - save_cache:
+          key: source-{{ .Branch }}-{{ .Revision }}
+          paths:
+            - .git
+      - restore_cache:
+          keys:
+            - deps-{{ checksum "deps.edn" }}
+            - deps-
+      - run:
+          name: Resolve dependencies
+          command: clojure -A:test:build -P
+      - save_cache:
+          key: deps-{{ checksum "deps.edn" }}
+          paths:
+            - /home/circleci/.m2
+      - persist_to_workspace:
+          root: /home/circleci/
+          paths:
+            - .m2
+            - simm-is
+
+  format-check:
+    executor: tools/clojurecli
+    steps:
+      - attach_workspace:
+          at: /home/circleci
+      - run:
+          name: Check code formatting
+          command: clojure -M:format
+
+  test-clj:
+    executor: tools/clojurecli
+    steps:
+      - attach_workspace:
+          at: /home/circleci
+      - run:
+          name: Run Clojure tests
+          command: clojure -X:test
+          no_output_timeout: 5m
+
+  build:
+    executor: tools/clojurecli
+    steps:
+      - attach_workspace:
+          at: /home/circleci
+      - run:
+          name: Build JAR
+          command: clojure -T:build jar
+      - persist_to_workspace:
+          root: /home/circleci/
+          paths:
+            - simm-is
+
+  deploy:
+    executor: tools/clojurecli
+    steps:
+      - attach_workspace:
+          at: /home/circleci
+      - run:
+          name: Deploy to Clojars
+          command: clojure -T:build deploy
+
+workflows:
+  build-test-deploy:
+    jobs:
+      - setup:
+          context: dockerhub-deploy
+      - format-check:
+          context: dockerhub-deploy
+          requires:
+            - setup
+      - test-clj:
+          context: dockerhub-deploy
+          requires:
+            - setup
+      - build:
+          context: dockerhub-deploy
+          requires:
+            - setup
+      - deploy:
+          context:
+            - dockerhub-deploy
+            - clojars-deploy
+          filters:
+            branches:
+              only: main
+          requires:
+            - format-check
+            - test-clj
+            - build

@@ -1,73 +1,56 @@
 (ns build
-  (:refer-clojure :exclude [test])
-  (:require [clojure.tools.deps :as t]
-            [clojure.tools.build.api :as b]
+  (:require [clojure.tools.build.api :as b]
             [deps-deploy.deps-deploy :as dd]))
 
 (def lib 'is.simm/partial-cps)
-(def version "0.1.0-SNAPSHOT")
-#_ ; alternatively, use MAJOR.MINOR.COMMITS:
-(def version (format "1.0.%s" (b/git-count-revs nil)))
+(def major 0)
+(def minor 1)
+(defn commit-count [] (b/git-count-revs nil))
+(defn version [] (format "%d.%d.%s" major minor (commit-count)))
 (def class-dir "target/classes")
+(defn jar-file [] (format "target/%s-%s.jar" (name lib) (version)))
+(def basis (delay (b/create-basis {:project "deps.edn"})))
 
-(defn test "Run all the tests." [opts]
-  (println "\nRunning tests...")
-  (let [basis    (b/create-basis {:aliases [:test]})
-        combined (t/combine-aliases basis [:test])
-        cmds     (b/java-command
-                  {:basis basis
-                   :java-opts (:jvm-opts combined)
-                   :main      'clojure.main
-                   :main-args ["-m" "cognitect.test-runner"]})
-        {:keys [exit]} (b/process cmds)]
-    (when-not (zero? exit) (throw (ex-info "Tests failed" {}))))
-  opts)
+(defn clean [_]
+  (b/delete {:path "target"}))
 
-(defn- pom-template [version]
-  [[:description "FIXME: my new library."]
-   [:url "https://github.com/is.simm/partial-cps"]
-   [:licenses
-    [:license
-     [:name "Eclipse Public License"]
-     [:url "http://www.eclipse.org/legal/epl-v10.html"]]]
-   [:developers
-    [:developer
-     [:name "Christian-weilbach"]]]
-   [:scm
-    [:url "https://github.com/is.simm/partial-cps"]
-    [:connection "scm:git:https://github.com/is.simm/partial-cps.git"]
-    [:developerConnection "scm:git:ssh:git@github.com:is.simm/partial-cps.git"]
-    [:tag (str "v" version)]]])
+(defn jar [_]
+  (clean nil)
+  (let [v (version)
+        jf (jar-file)]
+    (b/write-pom {:class-dir class-dir
+                  :lib lib
+                  :version v
+                  :basis @basis
+                  :src-dirs ["src"]
+                  :scm {:url "https://github.com/simm-is/partial-cps"
+                        :connection "scm:git:git://github.com/simm-is/partial-cps.git"
+                        :developerConnection "scm:git:ssh://git@github.com/simm-is/partial-cps.git"
+                        :tag (b/git-process {:git-args "rev-parse HEAD"})}
+                  :pom-data [[:description "Lightweight Clojure/ClojureScript library for partial continuation-passing style transformations."]
+                             [:url "https://github.com/simm-is/partial-cps"]
+                             [:licenses
+                              [:license
+                               [:name "Eclipse Public License"]
+                               [:url "http://www.eclipse.org/legal/epl-v10.html"]]]]})
+    (b/copy-dir {:src-dirs ["src" "resources"]
+                 :target-dir class-dir})
+    (b/jar {:class-dir class-dir
+            :jar-file jf})
+    (println "JAR created:" jf)))
 
-(defn- jar-opts [opts]
-  (assoc opts
-         :lib lib   :version version
-         :jar-file  (format "target/%s-%s.jar" lib version)
-         :basis     (b/create-basis {})
-         :class-dir class-dir
-         :target    "target"
-         :src-dirs  ["src"]
-         :pom-data  (pom-template version)))
+(defn deploy [_]
+  (jar nil)
+  (dd/deploy {:installer :remote
+              :artifact (jar-file)
+              :pom-file (b/pom-path {:lib lib :class-dir class-dir})})
+  (println "Deployed to Clojars!"))
 
-(defn ci "Run the CI pipeline of tests (and build the JAR)." [opts]
-  (test opts)
-  (b/delete {:path "target"})
-  (let [opts (jar-opts opts)]
-    (println "\nWriting pom.xml...")
-    (b/write-pom opts)
-    (println "\nCopying source...")
-    (b/copy-dir {:src-dirs ["resources" "src"] :target-dir class-dir})
-    (println "\nBuilding JAR...")
-    (b/jar opts))
-  opts)
-
-(defn install "Install the JAR locally." [opts]
-  (let [opts (jar-opts opts)]
-    (b/install opts))
-  opts)
-
-(defn deploy "Deploy the JAR to Clojars." [opts]
-  (let [{:keys [jar-file] :as opts} (jar-opts opts)]
-    (dd/deploy {:installer :remote :artifact (b/resolve-path jar-file)
-                :pom-file (b/pom-path (select-keys opts [:lib :class-dir]))}))
-  opts)
+(defn install [_]
+  (jar nil)
+  (b/install {:basis @basis
+              :lib lib
+              :version (version)
+              :jar-file (jar-file)
+              :class-dir class-dir})
+  (println "Installed to local Maven repo"))
