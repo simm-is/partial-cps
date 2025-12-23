@@ -1,5 +1,13 @@
 # partial-cps
 
+<p align="center">
+<a href="https://clojurians.slack.com/archives/C09622F337D"><img src="https://badgen.net/badge/-/slack?icon=slack&label"/></a>
+<a href="https://clojars.org/is.simm/partial-cps"><img src="https://img.shields.io/clojars/v/is.simm/partial-cps.svg"/></a>
+<a href="https://circleci.com/gh/simm-is/partial-cps"><img src="https://circleci.com/gh/simm-is/partial-cps.svg?style=shield"/></a>
+<a href="https://github.com/simm-is/partial-cps/tree/main"><img src="https://img.shields.io/github/last-commit/simm-is/partial-cps/main"/></a>
+<a href="https://cljdoc.org/d/is.simm/partial-cps"><img src="https://badgen.net/badge/cljdoc/partial-cps/blue"/></a>
+</p>
+
 A lightweight Clojure/ClojureScript library for [continuation-passing style](https://en.wikipedia.org/wiki/Continuation-passing_style) (CPS) transformations derived from [await-cps](https://github.com/mszajna/await-cps). The CPS transform rewrites code similarly to manual callback rewriting by providing a callback (continuation) to a user specified handler only where necessary (at a user-specified breakpoint). Compared to full CPS which transforms all code expressions, this approach leaves the remaining code synchronous and therefore retains readability compared to the transformations in [pulley](https://github.com/positronic-solutions/pulley.cps), [anglican](https://github.com/probprog/anglican/blob/master/src/anglican/trap.cljc), [core.async](https://github.com/clojure/core.async) or [cloroutine](https://github.com/leonoel/cloroutine). Nonetheless the benefits of CPS transforms are not reduced by the partial approach. The breakpoints and continuations still lend themselves to an effect handling perspective, where different types of effects (or alternatively monads) can be implemented as handlers for specific breakpoints.
 
 The transformed code is also usually faster than more invasive transforms (ANF, SSA) for synchronous sections, since it directly passes the user supplied Clojure code to the underlying compiler. Additionally, when dispatching into callbacks the transform does not prescribe dispatching into any processing or scheduling framework at breakpoints (threadpools, JS event loop, ...). Instead, the provided handler can use a direct safe trampolining dispatch. This avoids hardcoded scheduling overhead and only hits a threadpool dispatcher or JS event loop if the effect handler (e.g. awaited effect callback) explicitly schedules it. We found this to be necessary to implement fast async versions of persistent data structures and sequence abstractions in [persistent-sorted-set](https://github.com/replikativ/persistent-sorted-set/tree/lean-cps) for [datahike](https://github.com/replikativ/datahike/), where most async invocations are expected to hit warm caches and only sporadically asynchronous execution (IO) is needed, yet the fine grained nature of the async code renders dispatching into the JS event loop prohibitively expensive in such low-level code.
@@ -17,9 +25,13 @@ The transformed code is also usually faster than more invasive transforms (ANF, 
 
 ## Installation
 
-### deps.edn
+Add to your dependencies:
+
+[![Clojars Project](http://clojars.org/is.simm/partial-cps/latest-version.svg)](http://clojars.org/is.simm/partial-cps)
+
 ```clojure
-{is.simm/partial-cps {:git/url "https://github.com/simm-is/partial-cps" :git/sha "LATEST"}} ; Check github for latest commit
+;; deps.edn
+{:deps {is.simm/partial-cps {:mvn/version "LATEST"}}}
 ```
 
 ## Usage
