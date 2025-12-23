@@ -42,22 +42,22 @@
   is.simm.partial-cps.sequence/PAsyncSeq
   (anext [_]
     (async
-      (when-let [s (clojure.core/seq items)]
-        [(clojure.core/first s)
-         (when-let [rst (clojure.core/seq (clojure.core/rest s))]
-           (->SimpleAsyncSeq rst))]))))
+     (when-let [s (clojure.core/seq items)]
+       [(clojure.core/first s)
+        (when-let [rst (clojure.core/seq (clojure.core/rest s))]
+          (->SimpleAsyncSeq rst))]))))
 
 ;; Slow async sequence for testing lazy evaluation
 (defrecord SlowAsyncSeq [items delay-ms processed-count]
   is.simm.partial-cps.sequence/PAsyncSeq
   (anext [_]
     (async
-      (when-let [s (clojure.core/seq items)]
-        (swap! processed-count inc)
-        (let [v (await (future-delay delay-ms (clojure.core/first s)))]
-          [v
-           (when-let [rst (clojure.core/seq (clojure.core/rest s))]
-             (->SlowAsyncSeq rst delay-ms processed-count))])))))
+     (when-let [s (clojure.core/seq items)]
+       (swap! processed-count inc)
+       (let [v (await (future-delay delay-ms (clojure.core/first s)))]
+         [v
+          (when-let [rst (clojure.core/seq (clojure.core/rest s))]
+            (->SlowAsyncSeq rst delay-ms processed-count))])))))
 
 (defn make-slow-seq [items delay-ms]
   (->SlowAsyncSeq items delay-ms (atom 0)))
@@ -68,12 +68,12 @@
     (let [async-seq (->SimpleAsyncSeq [1 2 3 4 5])
           result (blocking-test
                   (async
-                    (let [first-val (await (seq/first async-seq))
-                          rest-seq (await (seq/rest async-seq))
-                          second-val (await (seq/first rest-seq))
-                          rest2-seq (await (seq/rest rest-seq))
-                          third-val (await (seq/first rest2-seq))]
-                      [first-val second-val third-val]))
+                   (let [first-val (await (seq/first async-seq))
+                         rest-seq (await (seq/rest async-seq))
+                         second-val (await (seq/first rest-seq))
+                         rest2-seq (await (seq/rest rest-seq))
+                         third-val (await (seq/first rest2-seq))]
+                     [first-val second-val third-val]))
                   1000)]
       (is (= [1 2 3] result)))))
 
@@ -82,9 +82,9 @@
     (let [empty-seq (->SimpleAsyncSeq [])
           result (blocking-test
                   (async
-                    (let [first-val (await (seq/first empty-seq))
-                          rest-val (await (seq/rest empty-seq))]
-                      [first-val rest-val]))
+                   (let [first-val (await (seq/first empty-seq))
+                         rest-val (await (seq/rest empty-seq))]
+                     [first-val rest-val]))
                   1000)]
       (is (= [nil nil] result)))))
 
@@ -93,10 +93,10 @@
     (let [single-seq (->SimpleAsyncSeq [:only])
           result (blocking-test
                   (async
-                    (let [first-val (await (seq/first single-seq))
-                          rest-seq (await (seq/rest single-seq))
-                          rest-first (when rest-seq (await (seq/first rest-seq)))]
-                      [first-val (some? rest-seq) rest-first]))
+                   (let [first-val (await (seq/first single-seq))
+                         rest-seq (await (seq/rest single-seq))
+                         rest-first (when rest-seq (await (seq/first rest-seq)))]
+                     [first-val (some? rest-seq) rest-first]))
                   1000)]
       (is (= [:only false nil] result)))))
 
@@ -106,7 +106,7 @@
     (let [async-seq (->SimpleAsyncSeq [1 2 3 4 5])
           result (blocking-test
                   (async
-                    (await (seq/transduce (map #(* % 10)) + 0 async-seq)))
+                   (await (seq/transduce (map #(* % 10)) + 0 async-seq)))
                   1000)]
       (is (= 150 result)))))  ; [10 20 30 40 50] sum = 150
 
@@ -115,7 +115,7 @@
     (let [async-seq (->SimpleAsyncSeq [1 2 3 4 5 6 7 8 9 10])
           result (blocking-test
                   (async
-                    (await (seq/transduce (filter even?) conj [] async-seq)))
+                   (await (seq/transduce (filter even?) conj [] async-seq)))
                   1000)]
       (is (= [2 4 6 8 10] result)))))
 
@@ -124,10 +124,10 @@
     (let [async-seq (->SimpleAsyncSeq [1 2 3 4 5 6 7 8 9 10])
           result (blocking-test
                   (async
-                    (await (seq/transduce (comp (filter even?)
-                                                (map #(* % 10))
-                                                (take 3))
-                                          conj [] async-seq)))
+                   (await (seq/transduce (comp (filter even?)
+                                               (map #(* % 10))
+                                               (take 3))
+                                         conj [] async-seq)))
                   1000)]
       (is (= [20 40 60] result)))))
 
@@ -136,7 +136,7 @@
     (let [async-seq (->SimpleAsyncSeq [1 2 3 4 5 6 7])
           result (blocking-test
                   (async
-                    (await (seq/transduce (partition-all 3) conj [] async-seq)))
+                   (await (seq/transduce (partition-all 3) conj [] async-seq)))
                   1000)]
       (is (= [[1 2 3] [4 5 6] [7]] result)))))
 
@@ -145,7 +145,7 @@
     (let [async-seq (->SimpleAsyncSeq [1 2 3 4 5 6 7 8 9 10])
           result (blocking-test
                   (async
-                    (await (seq/transduce (take 4) conj [] async-seq)))
+                   (await (seq/transduce (take 4) conj [] async-seq)))
                   1000)]
       (is (= [1 2 3 4] result)))))
 
@@ -154,7 +154,7 @@
     (let [empty-seq (->SimpleAsyncSeq [])
           result (blocking-test
                   (async
-                    (await (seq/transduce (map inc) + 42 empty-seq)))
+                   (await (seq/transduce (map inc) + 42 empty-seq)))
                   1000)]
       (is (= 42 result)))))  ; Should return init value
 
@@ -164,7 +164,7 @@
     (let [async-seq (->SimpleAsyncSeq [1 2 3 4 5])
           result (blocking-test
                   (async
-                    (await (seq/into [] async-seq)))
+                   (await (seq/into [] async-seq)))
                   1000)]
       (is (= [1 2 3 4 5] result)))))
 
@@ -173,7 +173,7 @@
     (let [async-seq (->SimpleAsyncSeq [1 2 3 4 5])
           result (blocking-test
                   (async
-                    (await (seq/into [] (map #(* % % )) async-seq)))
+                   (await (seq/into [] (map #(* % %)) async-seq)))
                   1000)]
       (is (= [1 4 9 16 25] result)))))
 
@@ -183,14 +183,14 @@
       ;; Into set
       (let [set-result (blocking-test
                         (async
-                          (await (seq/into #{} async-seq)))
+                         (await (seq/into #{} async-seq)))
                         1000)]
         (is (= #{1 2 3} set-result)))
-      
+
       ;; Into map
       (let [map-result (blocking-test
                         (async
-                          (await (seq/into {} (map #(vector % (* % 10))) async-seq)))
+                         (await (seq/into {} (map #(vector % (* % 10))) async-seq)))
                         1000)]
         (is (= {1 10, 2 20, 3 30} map-result))))))
 
@@ -201,10 +201,10 @@
           mapped-seq (seq/sequence (map #(* % 10)) async-seq)
           result (blocking-test
                   (async
-                    (let [first-val (await (seq/first mapped-seq))
-                          rest-seq (await (seq/rest mapped-seq))
-                          second-val (await (seq/first rest-seq))]
-                      [first-val second-val]))
+                   (let [first-val (await (seq/first mapped-seq))
+                         rest-seq (await (seq/rest mapped-seq))
+                         second-val (await (seq/first rest-seq))]
+                     [first-val second-val]))
                   1000)]
       (is (= [10 20] result)))))
 
@@ -215,12 +215,12 @@
           result (blocking-test
                   (async
                     ;; Collect first 3 even numbers
-                    (let [first-val (await (seq/first filtered-seq))
-                          rest1 (await (seq/rest filtered-seq))
-                          second-val (await (seq/first rest1))
-                          rest2 (await (seq/rest rest1))
-                          third-val (await (seq/first rest2))]
-                      [first-val second-val third-val]))
+                   (let [first-val (await (seq/first filtered-seq))
+                         rest1 (await (seq/rest filtered-seq))
+                         second-val (await (seq/first rest1))
+                         rest2 (await (seq/rest rest1))
+                         third-val (await (seq/first rest2))]
+                     [first-val second-val third-val]))
                   1000)]
       (is (= [2 4 6] result)))))
 
@@ -230,12 +230,12 @@
           partitioned-seq (seq/sequence (partition-all 3) async-seq)
           result (blocking-test
                   (async
-                    (let [first-partition (await (seq/first partitioned-seq))
-                          rest-seq (await (seq/rest partitioned-seq))
-                          second-partition (await (seq/first rest-seq))
-                          rest2-seq (await (seq/rest rest-seq))
-                          third-partition (await (seq/first rest2-seq))]
-                      [first-partition second-partition third-partition]))
+                   (let [first-partition (await (seq/first partitioned-seq))
+                         rest-seq (await (seq/rest partitioned-seq))
+                         second-partition (await (seq/first rest-seq))
+                         rest2-seq (await (seq/rest rest-seq))
+                         third-partition (await (seq/first rest2-seq))]
+                     [first-partition second-partition third-partition]))
                   1000)]
       (is (= [[1 2 3] [4 5 6] [7]] result)))))
 
@@ -244,11 +244,11 @@
     (let [async-seq (->SimpleAsyncSeq (range 1 20))
           transformed-seq (seq/sequence (comp (filter even?)
                                               (map #(* % 10))
-                                              (take 3)) 
-                                       async-seq)
+                                              (take 3))
+                                        async-seq)
           result (blocking-test
                   (async
-                    (await (seq/into [] transformed-seq)))
+                   (await (seq/into [] transformed-seq)))
                   1000)]
       (is (= [20 40 60] result)))))
 
@@ -258,7 +258,7 @@
     (let [async-seq (->SimpleAsyncSeq [1 3 5 7 9])  ; All odd numbers
           result (blocking-test
                   (async
-                    (await (seq/transduce (filter even?) conj [] async-seq)))
+                   (await (seq/transduce (filter even?) conj [] async-seq)))
                   1000)]
       (is (= [] result)))))
 
@@ -269,7 +269,7 @@
           filtered-seq (seq/sequence (filter even?) slow-seq)
           result (blocking-test
                   (async
-                    (await (seq/first filtered-seq)))
+                   (await (seq/first filtered-seq)))
                   1000)]
       (is (= 2 result))
       ;; Should have processed exactly 2 elements (1 and 2)
@@ -281,7 +281,7 @@
           taken-seq (seq/sequence (take 3) slow-seq)
           result (blocking-test
                   (async
-                    (await (seq/into [] taken-seq)))
+                   (await (seq/into [] taken-seq)))
                   1000)]
       (is (= [1 2 3] result))
       ;; Should have processed exactly 3 elements due to take
@@ -295,7 +295,7 @@
                                         slow-seq)
           result (blocking-test
                   (async
-                    (await (seq/into [] transformed-seq)))
+                   (await (seq/into [] transformed-seq)))
                   1000)]
       (is (= [2 4] result))
       ;; Should have processed 1,2,3,4 to get 2 even numbers
@@ -310,7 +310,7 @@
           result (try
                    (blocking-test
                     (async
-                      (await (seq/first failing-seq)))
+                     (await (seq/first failing-seq)))
                     1000)
                    :should-not-reach
                    (catch Exception e
@@ -324,7 +324,7 @@
           result (blocking-test
                   (async
                     ;; Just take first few to verify it doesn't load everything
-                    (await (seq/transduce (take 5) conj [] large-seq)))
+                   (await (seq/transduce (take 5) conj [] large-seq)))
                   2000)]
       (is (= [0 1 2 3 4] result)))))
 
@@ -339,12 +339,12 @@
           result (blocking-test
                   (async
                     ;; Create sequence of sequences
-                    (let [mapped-seq (seq/sequence (map #(->SimpleAsyncSeq [% (* % 10)])) async-seq)
-                          first-inner-seq (await (seq/first mapped-seq))
-                          first-inner-val (await (seq/first first-inner-seq))
-                          rest-inner (await (seq/rest first-inner-seq))
-                          second-inner-val (await (seq/first rest-inner))]
-                      [first-inner-val second-inner-val]))
+                   (let [mapped-seq (seq/sequence (map #(->SimpleAsyncSeq [% (* % 10)])) async-seq)
+                         first-inner-seq (await (seq/first mapped-seq))
+                         first-inner-val (await (seq/first first-inner-seq))
+                         rest-inner (await (seq/rest first-inner-seq))
+                         second-inner-val (await (seq/first rest-inner))]
+                     [first-inner-val second-inner-val]))
                   1000)]
       (is (= [1 10] result)))))
 

@@ -40,8 +40,8 @@
   [async-fn timeout-ms]
   (let [result (promise)]
     (async-fn
-      #(deliver result [:ok %])
-      #(deliver result [:error %]))
+     #(deliver result [:ok %])
+     #(deliver result [:error %]))
     (let [[status value] (deref result timeout-ms [:timeout nil])]
       (case status
         :ok value
@@ -57,10 +57,10 @@
     (let [results (atom [])
           result (blocking-test
                   (async
-                    (doseq [i [1 2 3]]
-                      (let [value (await (future-delay 10 (* i 10)))]
-                        (swap! results conj value)))
-                    :completed)
+                   (doseq [i [1 2 3]]
+                     (let [value (await (future-delay 10 (* i 10)))]
+                       (swap! results conj value)))
+                   :completed)
                   1000)]
       (is (= :completed result)) ; async block completed
       (is (= [10 20 30] @results)))))
@@ -70,10 +70,10 @@
     (let [results (atom [])
           result (blocking-test
                   (async
-                    (doseq [i [1 2] j [:a :b]]
-                      (let [value (await (future-delay 5 [i j]))]
-                        (swap! results conj value)))
-                    :completed)
+                   (doseq [i [1 2] j [:a :b]]
+                     (let [value (await (future-delay 5 [i j]))]
+                       (swap! results conj value)))
+                   :completed)
                   1000)]
       (is (= :completed result))
       (is (= [[1 :a] [1 :b] [2 :a] [2 :b]] @results)))))
@@ -91,10 +91,10 @@
           result (blocking-test
                   (async
                     ;; Await a collection in the binding itself
-                    (doseq [i (await (future-delay 20 [1 2 3]))]
-                      (let [value (await (future-delay 10 (* i 10)))]
-                        (swap! results conj value)))
-                    :completed)
+                   (doseq [i (await (future-delay 20 [1 2 3]))]
+                     (let [value (await (future-delay 10 (* i 10)))]
+                       (swap! results conj value)))
+                   :completed)
                   2000)]
       (is (= :completed result))
       (is (= [10 20 30] @results)))))
@@ -105,11 +105,11 @@
           result (blocking-test
                   (async
                     ;; Mix sync collection with async collection
-                    (doseq [letter [:x :y]
-                                  i (await (future-delay 20 [1 2]))]
-                      (let [value (await (future-delay 10 [letter i]))]
-                        (swap! results conj value)))
-                    :completed)
+                   (doseq [letter [:x :y]
+                           i (await (future-delay 20 [1 2]))]
+                     (let [value (await (future-delay 10 [letter i]))]
+                       (swap! results conj value)))
+                   :completed)
                   3000)]
       (is (= :completed result))
       (is (= [[:x 1] [:x 2] [:y 1] [:y 2]] @results)))))
@@ -119,10 +119,10 @@
     (let [results (atom [])
           result (blocking-test
                   (async
-                    (doseq [i []]
-                      (let [value (await (future-delay 10 i))]
-                        (swap! results conj value)))
-                    :completed)
+                   (doseq [i []]
+                     (let [value (await (future-delay 10 i))]
+                       (swap! results conj value)))
+                   :completed)
                   500)]
       (is (= :completed result))
       (is (= [] @results)))))
@@ -132,10 +132,10 @@
     (let [results (atom [])
           result (blocking-test
                   (async
-                    (dotimes [i 3]
-                      (let [value (await (future-delay 10 (* i 100)))]
-                        (swap! results conj value)))
-                    :completed)
+                   (dotimes [i 3]
+                     (let [value (await (future-delay 10 (* i 100)))]
+                       (swap! results conj value)))
+                   :completed)
                   1000)]
       (is (= :completed result))
       (is (= [0 100 200] @results)))))
@@ -152,10 +152,10 @@
     (let [results (atom [])
           result (blocking-test
                   (async
-                    (dotimes [i 0]
-                      (let [value (await (future-delay 10 i))]
-                        (swap! results conj value)))
-                    :completed)
+                   (dotimes [i 0]
+                     (let [value (await (future-delay 10 i))]
+                       (swap! results conj value)))
+                   :completed)
                   500)]
       (is (= :completed result))
       (is (= [] @results)))))
@@ -165,11 +165,11 @@
     (let [results (atom [])
           result (blocking-test
                   (async
-                    (doseq [letter [:a :b]]
-                      (dotimes [i 2]
-                        (let [value (await (future-delay 5 [letter i]))]
-                          (swap! results conj value))))
-                    :completed)
+                   (doseq [letter [:a :b]]
+                     (dotimes [i 2]
+                       (let [value (await (future-delay 5 [letter i]))]
+                         (swap! results conj value))))
+                   :completed)
                   1000)]
       (is (= :completed result))
       (is (= [[:a 0] [:a 1] [:b 0] [:b 1]] @results)))))
@@ -184,11 +184,11 @@
           results (atom [])
           result (blocking-test
                   (async
-                    (while (< @counter 3)
-                      (let [value (await (future-delay 10 @counter))]
-                        (swap! results conj value)
-                        (swap! counter inc)))
-                    :completed)
+                   (while (< @counter 3)
+                     (let [value (await (future-delay 10 @counter))]
+                       (swap! results conj value)
+                       (swap! counter inc)))
+                   :completed)
                   1000)]
       (is (= :completed result))
       (is (= [0 1 2] @results)))))
@@ -198,14 +198,14 @@
     (let [results (atom [])
           get-next (fn []
                      (async-cb-delay 10
-                       (if (< (count @results) 3)
-                         (inc (count @results))
-                         nil)))
+                                     (if (< (count @results) 3)
+                                       (inc (count @results))
+                                       nil)))
           result (blocking-test
                   (async
-                    (while (await (get-next))
-                      (swap! results conj :item))
-                    :completed)
+                   (while (await (get-next))
+                     (swap! results conj :item))
+                   :completed)
                   1000)]
       (is (= :completed result))
       (is (= [:item :item :item] @results)))))
@@ -216,13 +216,13 @@
           results (atom [])
           result (blocking-test
                   (async
-                    (while (< @counter 10)
-                      (let [value (await (future-delay 10 @counter))]
-                        (swap! results conj value)
-                        (swap! counter inc)
-                        (when (= @counter 3)
-                          (swap! counter (constantly 100))))) ; Force exit
-                    :completed)
+                   (while (< @counter 10)
+                     (let [value (await (future-delay 10 @counter))]
+                       (swap! results conj value)
+                       (swap! counter inc)
+                       (when (= @counter 3)
+                         (swap! counter (constantly 100))))) ; Force exit
+                   :completed)
                   1000)]
       (is (= :completed result))
       (is (= [0 1 2] @results)))))
@@ -232,11 +232,11 @@
     (let [results (atom [])
           result (blocking-test
                   (async
-                    (dotimes [i 2]
-                      (dotimes [j 2]
-                        (let [value (await (future-delay 5 [i j]))]
-                          (swap! results conj value))))
-                    :completed)
+                   (dotimes [i 2]
+                     (dotimes [j 2]
+                       (let [value (await (future-delay 5 [i j]))]
+                         (swap! results conj value))))
+                   :completed)
                   1000)]
       (is (= :completed result))
       (is (= [[0 0] [0 1] [1 0] [1 1]] @results)))))
@@ -250,11 +250,11 @@
     (let [results (atom [])
           result (blocking-test
                   (async
-                    (doseq [i [1 2 3]
-                            :let [doubled (* i 2)]]
-                      (let [value (await (future-delay 10 doubled))]
-                        (swap! results conj value)))
-                    :completed)
+                   (doseq [i [1 2 3]
+                           :let [doubled (* i 2)]]
+                     (let [value (await (future-delay 10 doubled))]
+                       (swap! results conj value)))
+                   :completed)
                   1000)]
       (is (= :completed result))
       (is (= [2 4 6] @results)))))
@@ -264,11 +264,11 @@
     (let [results (atom [])
           result (blocking-test
                   (async
-                    (doseq [i [1 2 3 4 5]
-                            :when (even? i)]
-                      (let [value (await (future-delay 10 i))]
-                        (swap! results conj value)))
-                    :completed)
+                   (doseq [i [1 2 3 4 5]
+                           :when (even? i)]
+                     (let [value (await (future-delay 10 i))]
+                       (swap! results conj value)))
+                   :completed)
                   1000)]
       (is (= :completed result))
       (is (= [2 4] @results)))))
@@ -278,11 +278,11 @@
     (let [results (atom [])
           result (blocking-test
                   (async
-                    (doseq [i [1 2 3 4 5]
-                            :while (< i 4)]
-                      (let [value (await (future-delay 10 i))]
-                        (swap! results conj value)))
-                    :completed)
+                   (doseq [i [1 2 3 4 5]
+                           :while (< i 4)]
+                     (let [value (await (future-delay 10 i))]
+                       (swap! results conj value)))
+                   :completed)
                   1000)]
       (is (= :completed result))
       (is (= [1 2 3] @results)))))
@@ -292,13 +292,13 @@
     (let [results (atom [])
           result (blocking-test
                   (async
-                    (doseq [i [1 2 3 4 5]
-                            :when (odd? i)
-                            :let [squared (* i i)]
-                            :while (< squared 20)]
-                      (let [value (await (future-delay 10 squared))]
-                        (swap! results conj value)))
-                    :completed)
+                   (doseq [i [1 2 3 4 5]
+                           :when (odd? i)
+                           :let [squared (* i i)]
+                           :while (< squared 20)]
+                     (let [value (await (future-delay 10 squared))]
+                       (swap! results conj value)))
+                   :completed)
                   1000)]
       (is (= :completed result))
       (is (= [1 9] @results))))) ; 1^2=1, 3^2=9, 5^2=25 (stopped by :while)
@@ -308,18 +308,17 @@
     (let [results (atom [])
           result (blocking-test
                   (async
-                    (doseq [i [1 2]
-                            j [:a :b]
-                            k [:x :y]]
-                      (let [value (await (future-delay 5 [i j k]))]
-                        (swap! results conj value)))
-                    :completed)
+                   (doseq [i [1 2]
+                           j [:a :b]
+                           k [:x :y]]
+                     (let [value (await (future-delay 5 [i j k]))]
+                       (swap! results conj value)))
+                   :completed)
                   2000)]
       (is (= :completed result))
       (is (= 8 (count @results))) ; 2 * 2 * 2 = 8
       (is (= [1 :a :x] (first @results)))
       (is (= [2 :b :y] (last @results))))))
-
 
 ;; =============================================================================
 ;; Performance and Stress Tests
@@ -331,10 +330,10 @@
           n 100
           result (blocking-test
                   (async
-                    (doseq [i (range n)]
-                      (let [value (await (future-delay 1 i))]
-                        (swap! results conj value)))
-                    :completed)
+                   (doseq [i (range n)]
+                     (let [value (await (future-delay 1 i))]
+                       (swap! results conj value)))
+                   :completed)
                   10000)]
       (is (= :completed result))
       (is (= (range n) @results)))))
@@ -345,10 +344,10 @@
           n 100
           result (blocking-test
                   (async
-                    (dotimes [i n]
-                      (let [value (await (future-delay 1 i))]
-                        (swap! results conj value)))
-                    :completed)
+                   (dotimes [i n]
+                     (let [value (await (future-delay 1 i))]
+                       (swap! results conj value)))
+                   :completed)
                   10000)]
       (is (= :completed result))
       (is (= (range n) @results)))))
@@ -358,12 +357,12 @@
     (let [results (atom [])
           result (blocking-test
                   (async
-                    (doseq [a [1 2]]
-                      (dotimes [b 2]
-                        (doseq [c [:x :y]]
-                          (let [value (await (future-delay 2 [a b c]))]
-                            (swap! results conj value)))))
-                    :completed)
+                   (doseq [a [1 2]]
+                     (dotimes [b 2]
+                       (doseq [c [:x :y]]
+                         (let [value (await (future-delay 2 [a b c]))]
+                           (swap! results conj value)))))
+                   :completed)
                   5000)]
       (is (= :completed result))
       (is (= 8 (count @results)))))) ; 2 * 2 * 2 = 8
@@ -375,44 +374,44 @@
 (deftest test-doseq-with-exception-in-body
   (testing "doseq propagates exceptions from body"
     (is (thrown-with-msg?
-          Exception
-          #"Test exception"
-          (blocking-test
-            (async
-              (doseq [i [1 2 3]]
-                (await (future-delay 10 i))
-                (when (= i 2)
-                  (throw (Exception. "Test exception"))))
-              :completed)
-            1000)))))
+         Exception
+         #"Test exception"
+         (blocking-test
+          (async
+           (doseq [i [1 2 3]]
+             (await (future-delay 10 i))
+             (when (= i 2)
+               (throw (Exception. "Test exception"))))
+           :completed)
+          1000)))))
 
 (deftest test-dotimes-with-exception-in-body
   (testing "dotimes propagates exceptions from body"
     (is (thrown-with-msg?
-          Exception
-          #"Test exception"
-          (blocking-test
-            (async
-              (dotimes [i 5]
-                (await (future-delay 10 i))
-                (when (= i 3)
-                  (throw (Exception. "Test exception"))))
-              :completed)
-            1000)))))
+         Exception
+         #"Test exception"
+         (blocking-test
+          (async
+           (dotimes [i 5]
+             (await (future-delay 10 i))
+             (when (= i 3)
+               (throw (Exception. "Test exception"))))
+           :completed)
+          1000)))))
 
 (deftest test-doseq-with-exception-in-await
   (testing "doseq propagates exceptions from await"
     (is (thrown-with-msg?
-          Exception
-          #"Async exception"
-          (blocking-test
-            (async
-              (doseq [i [1 2 3]]
-                (await (fn [resolve reject]
-                         (future
-                           (Thread/sleep 10)
-                           (if (= i 2)
-                             ((async-callback reject) (Exception. "Async exception"))
-                             ((async-callback resolve) i))))))
-              :completed)
-            1000)))))
+         Exception
+         #"Async exception"
+         (blocking-test
+          (async
+           (doseq [i [1 2 3]]
+             (await (fn [resolve reject]
+                      (future
+                        (Thread/sleep 10)
+                        (if (= i 2)
+                          ((async-callback reject) (Exception. "Async exception"))
+                          ((async-callback resolve) i))))))
+           :completed)
+          1000)))))

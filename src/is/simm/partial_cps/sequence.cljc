@@ -28,8 +28,8 @@
   Convenience wrapper around anext."
   [async-seq]
   (async
-    (when-let [[v _] (await (anext async-seq))]
-      v)))
+   (when-let [[v _] (await (anext async-seq))]
+     v)))
 
 (defn rest
   "Returns async expression yielding rest of sequence after first element.
@@ -39,8 +39,8 @@
   Convenience wrapper around anext."
   [async-seq]
   (async
-    (when-let [[_ rest-seq] (await (anext async-seq))]
-      rest-seq)))
+   (when-let [[_ rest-seq] (await (anext async-seq))]
+     rest-seq)))
 
 ;; Transducers
 
@@ -48,17 +48,17 @@
   "Transduce over an AsyncSeq eagerly, returning a Promise of the final result."
   [xform f init async-seq]
   (async
-    (let [rf (xform f)]
-      (loop [result init
-             seq async-seq]
-        (if seq
-          (if-let [[v rest-seq] (await (anext seq))]
-            (let [result' (rf result v)]
-              (if (reduced? result')
-                (rf (unreduced result'))
-                (recur result' rest-seq)))
-            (rf result))
-          (rf result))))))
+   (let [rf (xform f)]
+     (loop [result init
+            seq async-seq]
+       (if seq
+         (if-let [[v rest-seq] (await (anext seq))]
+           (let [result' (rf result v)]
+             (if (reduced? result')
+               (rf (unreduced result'))
+               (recur result' rest-seq)))
+           (rf result))
+         (rf result))))))
 
 (defn into
   ([to xform async-seq]
@@ -75,60 +75,60 @@
   (-ensure-buffer! [_ idx]
     (async
       ;; First check if we already have the element
-      (if (> (count @buffer) idx)
-        true
+     (if (> (count @buffer) idx)
+       true
         ;; Need more elements or completion already called
-        (if @completed?
-          false  ; No more elements available
+       (if @completed?
+         false  ; No more elements available
           ;; Try to pull more from source
-          (loop []
-            (if (> (count @buffer) idx)
+         (loop []
+           (if (> (count @buffer) idx)
               ;; We have enough
-              true
+             true
               ;; Need to pull from source
-              (if-let [source @source-ref]
-                (if-let [[v next-source] (await (anext source))]
+             (if-let [source @source-ref]
+               (if-let [[v next-source] (await (anext source))]
                   ;; Got value - feed through transducer
-                  (let [result (xf nil v)
-                        _ (vreset! source-ref next-source)]
-                    (if (reduced? result)
+                 (let [result (xf nil v)
+                       _ (vreset! source-ref next-source)]
+                   (if (reduced? result)
                       ;; Reduced - complete and check buffer
-                      (do
-                        (vreset! completed? true)
+                     (do
+                       (vreset! completed? true)
                         ;; Call completion
-                        (xf (unreduced result))
+                       (xf (unreduced result))
                         ;; Check if we have element after completion
-                        (> (count @buffer) idx))
+                       (> (count @buffer) idx))
                       ;; Check if we have more source
-                      (if next-source
+                     (if next-source
                         ;; Continue pulling
-                        (recur)
+                       (recur)
                         ;; No more source - need to call completion
-                        (do
-                          (vreset! completed? true)
-                          (xf nil)
-                          (> (count @buffer) idx)))))
+                       (do
+                         (vreset! completed? true)
+                         (xf nil)
+                         (> (count @buffer) idx)))))
                   ;; Source exhausted - call completion
-                  (do
-                    (vreset! completed? true)
-                    (vreset! source-ref nil)
+                 (do
+                   (vreset! completed? true)
+                   (vreset! source-ref nil)
                     ;; Call completion - this may add more elements (e.g., partition-all)
-                    (xf nil)
+                   (xf nil)
                     ;; Check if completion added the element we need
-                    (> (count @buffer) idx)))
+                   (> (count @buffer) idx)))
                 ;; No source available
-                (do
-                  (vreset! completed? true)
-                  false)))))))))
+               (do
+                 (vreset! completed? true)
+                 false)))))))))
 
 (deftype TransducedAsyncSeq [state idx]
   PAsyncSeq
   (anext [_]
     (async
       ;; Ensure buffer has element at idx
-      (when (await (-ensure-buffer! state idx))
-        [(nth @(.-buffer state) idx)
-         (TransducedAsyncSeq. state (inc idx))]))))
+     (when (await (-ensure-buffer! state idx))
+       [(nth @(.-buffer state) idx)
+        (TransducedAsyncSeq. state (inc idx))]))))
 
 (defn sequence
   "Transform an AsyncSeq with a transducer, returning a new lazy AsyncSeq.
@@ -168,9 +168,9 @@
   PAsyncSeq
   (anext [_]
     (async
-      (when current-state
-        (when-let [[value next-state] (await (generator-fn current-state))]
-          [value (GeneratorSeq. generator-fn next-state)])))))
+     (when current-state
+       (when-let [[value next-state] (await (generator-fn current-state))]
+         [value (GeneratorSeq. generator-fn next-state)])))))
 
 (defn make-generator-seq
   "Create async sequence from generator function and initial state.

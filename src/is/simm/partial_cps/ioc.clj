@@ -34,7 +34,7 @@
         ;; ClojureScript
         (when (:macro (resolve-macro-var-cljs env sym))
           (let [expanded (apply (resolve (:name (resolve-macro-var-cljs env sym)))
-                               form env (rest form))]
+                                form env (rest form))]
             [expanded true]))
         ;; Clojure
         (when-let [resolved (resolve env sym)]
@@ -46,16 +46,16 @@
   [form {:keys [breakpoints recur-target env expansion-cache] :as ctx}]
   ;; Check cache first, then expand if needed
   (let [[form-to-check ctx'] (if-let [cached (when expansion-cache (get @expansion-cache form))]
-                                [cached ctx]
+                               [cached ctx]
                                 ;; Not in cache, try to expand
-                                (if-let [[expanded _] (expand-macro form env)]
-                                  (do
-                                    (when expansion-cache
-                                      (swap! expansion-cache assoc form expanded))
+                               (if-let [[expanded _] (expand-macro form env)]
+                                 (do
+                                   (when expansion-cache
+                                     (swap! expansion-cache assoc form expanded))
                                     ;; Recursively check the expansion
-                                    [expanded ctx])
+                                   [expanded ctx])
                                   ;; Not a macro, use form as-is
-                                  [form ctx]))
+                                 [form ctx]))
         sym (when (seq? form-to-check) (first form-to-check))
         resolved-sym (var-name env sym)
         has-term? (contains? breakpoints resolved-sym)
@@ -133,11 +133,11 @@
              ;; Wrapped resolve - restores outer bindings before calling original r
              ~wrapped-r (fn [val#]
                           (~binding-sym [~@(interleave var-syms saved-syms)]
-                            (~r val#)))
+                                        (~r val#)))
              ;; Wrapped reject - restores outer bindings before calling original e
              ~wrapped-e (fn [err#]
                           (~binding-sym [~@(interleave var-syms saved-syms)]
-                            (~e err#)))]
+                                        (~e err#)))]
          ;; Transform the EXPANDED binding form with wrapped continuations
          ~(invert (assoc ctx :r wrapped-r :e wrapped-e)
                   ;; Expand the binding macro and transform the expansion
@@ -230,10 +230,10 @@
                                       (letfn [(~cont [async-value#]
                                                 (let* [~sym async-value#]
                                                       ~(invert-impl (add-env-syms (dissoc updated-ctx :sync-recur?) [sym])
-                                                               (if (seq others)
-                                                                 `(let* [~@(mapcat identity others)]
-                                                                        ~@(rest tail))
-                                                                 `(do ~@(rest tail))))))]
+                                                                    (if (seq others)
+                                                                      `(let* [~@(mapcat identity others)]
+                                                                             ~@(rest tail))
+                                                                      `(do ~@(rest tail))))))]
                                         ~(invert-impl (assoc updated-ctx :r cont) asn)))
                                ;; No async bindings
                                `(let* [~@(mapcat identity syncs)]
@@ -243,7 +243,7 @@
         letfn*
         `(letfn* ~(first tail)
                  ~(invert-impl (add-env-syms ctx (->> tail first (partition 2) (map first)))
-                          `(do ~@(rest tail))))
+                               `(do ~@(rest tail))))
 
         do
         (let [[syncs [asn & others]] (split-with #(not (has-breakpoints? % ctx)) tail)
@@ -252,7 +252,7 @@
             `(do ~@syncs
                  ~(if others
                     `(letfn [(~cont [_#] ~(invert-impl (dissoc ctx :sync-recur?)
-                                                  `(do ~@others)))]
+                                                       `(do ~@others)))]
                        ~(invert-impl (assoc ctx :r cont) asn))
                     (invert-impl ctx asn)))
             `(~r ~form)))
@@ -263,8 +263,8 @@
           (cond
             (has-breakpoints? binds ctx)
             (invert-impl ctx `(let [~@binds]
-                           (loop [~@(interleave bind-names bind-names)]
-                             ~@body)))
+                                (loop [~@(interleave bind-names bind-names)]
+                                  ~@body)))
 
             (has-breakpoints? body (dissoc ctx :recur-target))
             (let [recur-target (gensym "recur")
@@ -272,9 +272,9 @@
               `(letfn [(~recur-target [~@bind-names]
                          (loop [~@(interleave bind-names bind-names)]
                            ~(invert-impl (assoc updated-ctx
-                                           :sync-recur? true
-                                           :recur-target recur-target)
-                                    `(do ~@body))))]
+                                                :sync-recur? true
+                                                :recur-target recur-target)
+                                         `(do ~@body))))]
                  (let [~@binds] (~recur-target ~@bind-names))))
 
             :else `(~r ~form)))
@@ -314,7 +314,7 @@
                             ~@(map (fn [[sym cls bnd & body]]
                                      `(~sym ~cls ~bnd
                                             ~(invert-impl (assoc (add-env-syms ctx [bnd]) :r fin :e fin-throw)
-                                                     `(do ~@body))))
+                                                          `(do ~@body))))
                                    catches))
                        (catch ~all-ex t# (~fin-do nil t#))))]
              (try ~(invert-impl (assoc ctx :r fin :e cat) `(do ~@body))

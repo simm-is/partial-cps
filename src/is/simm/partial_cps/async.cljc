@@ -19,7 +19,6 @@
   [async-cb]
   (throw (ex-info "await called outside of asynchronous scope" {:async-cb async-cb})))
 
-
 (def ^:dynamic *in-trampoline* false)
 
 (defn invoke-continuation
@@ -61,16 +60,16 @@
     (assert (= (count args) 1) (str "Expected 1 argument, got " args))
     (let [env (:env ctx)]
       `(letfn [(safe-r# [v#]
-                        (try
-                          (if *in-trampoline*
-                            (~r v#)
-                            (binding [*in-trampoline* true]
-                              (loop [result# (~r v#)]
-                                (if (instance? is.simm.partial_cps.runtime.Thunk result#)
+                 (try
+                   (if *in-trampoline*
+                     (~r v#)
+                     (binding [*in-trampoline* true]
+                       (loop [result# (~r v#)]
+                         (if (instance? is.simm.partial_cps.runtime.Thunk result#)
                                   ;; If continuation returns a thunk, trampoline it
-                                  (recur ((.-f ^is.simm.partial_cps.runtime.Thunk result#)))
-                                  result#))))
-                          (catch ~(if (:js-globals env) :default `Throwable) t# (~e t#))))]
+                           (recur ((.-f ^is.simm.partial_cps.runtime.Thunk result#)))
+                           result#))))
+                   (catch ~(if (:js-globals env) :default `Throwable) t# (~e t#))))]
          (~(first args) safe-r# ~e)))))
 
 (def ^:no-doc breakpoints

@@ -28,6 +28,8 @@
 /checkouts
 /classes
 /target
+/docs
+/examples
 
 .shadow-cljs
 package-lock.json
