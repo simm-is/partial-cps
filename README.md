@@ -317,11 +317,14 @@ The library integrates well with standard test frameworks:
 
 ```bash
 # Clojure tests
-clojure -X:test
+clojure -M:test
 
-# ClojureScript tests
-npx shadow-cljs compile test
-node target/test.js
+# ClojureScript tests (compile and run)
+npx shadow-cljs compile test && node target/test.js
+
+# ClojureScript tests with watch mode (auto-recompile)
+npx shadow-cljs watch test
+# Then in another terminal: node target/test.js
 ```
 
 ### Building

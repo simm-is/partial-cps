@@ -213,10 +213,25 @@
             `(if ~con ~(invert-impl ctx left) ~(invert-impl ctx right))))
 
         case*
-        (let [[ge shift mask default imap & args] tail
-              imap (reduce-kv #(assoc %1 %2 (update %3 1 (fn [v] (invert-impl ctx v))))
-                              {} imap)]
-          `(case* ~ge ~shift ~mask ~(invert-impl ctx default) ~imap ~@args))
+        ;; Handle both CLJ and CLJS case* formats
+        ;; CLJ: (case* ge shift mask default imap ...)
+        ;;      where imap is {hash [test-constant result-expr], ...}
+        ;; CLJS: (case* test-expr [[k1] [k2] ...] [v1 v2 ...] default)
+        ;;       where keys are vectors of matching values, vals are corresponding expressions
+        (if (:js-globals env)
+          ;; CLJS format: (case* test-expr [[k1] [k2] ...] [v1 v2 ...] default)
+          ;; Only 4 args: test-expr, keys-vec, vals-vec, default
+          (let [[test-expr keys-vec vals-vec default-expr] tail
+                ;; Transform each value expression to call r
+                inverted-vals (mapv #(invert-impl ctx %) vals-vec)
+                ;; Transform default expression
+                inverted-default (invert-impl ctx default-expr)]
+            `(case* ~test-expr ~keys-vec ~inverted-vals ~inverted-default))
+          ;; CLJ format
+          (let [[ge shift mask default imap & args] tail
+                imap (reduce-kv #(assoc %1 %2 (update %3 1 (fn [v] (invert-impl ctx v))))
+                                {} imap)]
+            `(case* ~ge ~shift ~mask ~(invert-impl ctx default) ~imap ~@args)))
 
         let*
         (let [bindings-vec (first tail)
@@ -354,6 +369,12 @@
             (resolve-sequentially ctx value
                                   (fn [value] `(~r (def ~name ~@value))))
             `(~r ~form)))
+
+        (monitor-enter monitor-exit)
+        (throw (ex-info (str "Cannot use " head " with async breakpoints. "
+                             "Holding a lock across an await point would cause deadlocks. "
+                             "Consider using an atom, ref, or agent instead.")
+                        {:form form :special-form head}))
 
         (throw (ex-info (str "Unsupported special symbol [" head "]")
                         {:unknown-special-form head :form form})))

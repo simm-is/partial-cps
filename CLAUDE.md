@@ -23,16 +23,23 @@ clojure -T:build deploy
 ### Testing
 ```bash
 # Run Clojure tests
-clojure -T:build test
+clojure -M:test
 
-# Alternative: Run tests directly with test-runner
-clojure -M:test -m cognitect.test-runner
+# Run ClojureScript tests (compile and run)
+npx shadow-cljs compile test && node target/test.js
+
+# Run ClojureScript tests with watch mode
+npx shadow-cljs watch test
+# Then in another terminal: node target/test.js
 ```
 
 ### REPL
 ```bash
-# Start REPL with CIDER support
+# Start Clojure REPL with CIDER support
 clojure -M:repl
+
+# Start ClojureScript REPL (node-based)
+npx shadow-cljs cljs-repl test
 ```
 
 ## Architecture
@@ -66,6 +73,8 @@ clojure -M:repl
 
 ## Testing Approach
 
-- Clojure tests use `clojure.test` and are run via cognitect test-runner
-- ClojureScript tests exist but require shadow-cljs configuration to be completed
-- Test files follow the pattern `<namespace>_test.clj[s]`
+- Cross-platform tests use `.cljc` files with `clojure.test`/`cljs.test`
+- CLJ tests are run via cognitect test-runner: `clojure -M:test`
+- CLJS tests use shadow-cljs with node target: `npx shadow-cljs compile test && node target/test.js`
+- Test files follow the pattern `<namespace>_test.clj[cs]`
+- `test_helpers.cljc` provides cross-platform `test-async` macros for unified async testing

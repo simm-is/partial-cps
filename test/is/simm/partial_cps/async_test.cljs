@@ -3,7 +3,8 @@
             [is.simm.partial-cps.async :refer [await]]
             [clojure.pprint :refer [pprint]]
             [is.simm.partial-cps.sequence-test :as sequence]
-            [is.simm.partial-cps.for-async-test :as for-async])
+            [is.simm.partial-cps.for-async-test :as for-async]
+            [is.simm.partial-cps.core-test :as core-test])
   (:require-macros [is.simm.partial-cps.async :refer [async]]))
 
 ;; Test helpers
@@ -157,4 +158,5 @@
 (defn ^:export run-tests []
   (test/run-tests 'is.simm.partial-cps.async-test)
   (test/run-tests 'is.simm.partial-cps.sequence-test)
-  (test/run-tests 'is.simm.partial-cps.for-async-test))
+  (test/run-tests 'is.simm.partial-cps.for-async-test)
+  (test/run-tests 'is.simm.partial-cps.core-test))

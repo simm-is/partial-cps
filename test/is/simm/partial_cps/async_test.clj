@@ -91,6 +91,119 @@
                   200)]
       (is (= "true-branch" result)))))
 
+;; Case expression tests
+(deftest test-case-with-await-in-branches
+  (testing "case with await in matching branches"
+    (let [result (blocking-test
+                  (async
+                   (case :b
+                     :a (await (future-delay 20 "matched-a"))
+                     :b (await (future-delay 20 "matched-b"))
+                     :c (await (future-delay 20 "matched-c"))
+                     (await (future-delay 20 "default"))))
+                  300)]
+      (is (= "matched-b" result)))))
+
+(deftest test-case-with-await-in-default
+  (testing "case with await in default branch"
+    (let [result (blocking-test
+                  (async
+                   (case :unknown
+                     :a "matched-a"
+                     :b "matched-b"
+                     (await (future-delay 20 "default-async"))))
+                  300)]
+      (is (= "default-async" result)))))
+
+(deftest test-case-with-await-in-test-expr
+  (testing "case where test expression contains await"
+    (let [result (blocking-test
+                  (async
+                   (case (await (future-delay 20 :c))
+                     :a "matched-a"
+                     :b "matched-b"
+                     :c "matched-c"
+                     "default"))
+                  300)]
+      (is (= "matched-c" result)))))
+
+(deftest test-case-with-mixed-sync-async-branches
+  (testing "case with some sync and some async branches"
+    (let [result (blocking-test
+                  (async
+                   (case :b
+                     :a "sync-a"
+                     :b (await (future-delay 20 "async-b"))
+                     :c "sync-c"
+                     "default"))
+                  300)]
+      (is (= "async-b" result)))))
+
+(deftest test-case-with-multiple-constants
+  (testing "case with multiple constants matching same branch"
+    (let [result (blocking-test
+                  (async
+                   (case :y
+                     (:a :b :c) (await (future-delay 20 "first-group"))
+                     (:x :y :z) (await (future-delay 20 "second-group"))
+                     (await (future-delay 20 "default"))))
+                  300)]
+      (is (= "second-group" result)))))
+
+(deftest test-case-integer-dispatch
+  (testing "case with integer dispatch and await"
+    (let [result (blocking-test
+                  (async
+                   (case 2
+                     1 (await (future-delay 20 "one"))
+                     2 (await (future-delay 20 "two"))
+                     3 (await (future-delay 20 "three"))
+                     (await (future-delay 20 "other"))))
+                  300)]
+      (is (= "two" result)))))
+
+(deftest test-case-string-dispatch
+  (testing "case with string dispatch and await"
+    (let [result (blocking-test
+                  (async
+                   (case "hello"
+                     "hi" (await (future-delay 20 "greeting-hi"))
+                     "hello" (await (future-delay 20 "greeting-hello"))
+                     "hey" (await (future-delay 20 "greeting-hey"))
+                     (await (future-delay 20 "unknown-greeting"))))
+                  300)]
+      (is (= "greeting-hello" result)))))
+
+(deftest test-case-in-let-binding
+  (testing "case result with await used in let binding"
+    (let [result (blocking-test
+                  (async
+                   (let [x (case :multiply
+                             :add (await (future-delay 20 (+ 2 3)))
+                             :multiply (await (future-delay 20 (* 2 3)))
+                             :subtract (await (future-delay 20 (- 5 2)))
+                             0)]
+                     (* x 10)))
+                  300)]
+      (is (= 60 result)))))
+
+(deftest test-nested-case-with-await
+  (testing "nested case expressions with await"
+    (let [result (blocking-test
+                  (async
+                   (case :outer-b
+                     :outer-a (case :inner-x
+                                :inner-x (await (future-delay 20 "a-x"))
+                                :inner-y (await (future-delay 20 "a-y"))
+                                "a-default")
+                     :outer-b (case :inner-y
+                                :inner-x (await (future-delay 20 "b-x"))
+                                :inner-y (await (future-delay 20 "b-y"))
+                                "b-default")
+                     "outer-default"))
+                  300)]
+      (is (= "b-y" result)))))
+
 ;; Error handling tests
 (deftest test-async-error-handling
   (testing "Async operation that throws is caught by error handler"
