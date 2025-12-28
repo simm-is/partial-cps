@@ -251,14 +251,24 @@ Build your own control flow primitives:
   (fn [error] (println "Error:" error)))
 ```
 
-### Performance Characteristics
+### Performance
 
-The library is designed for high performance:
+The library is designed to minimize overhead:
 
 - **Minimal transformation**: Only rewrites code at breakpoint points
 - **No scheduling overhead**: Direct callback execution unless you add scheduling
 - **Safe trampolining**: Prevents stack overflow while maintaining speed
 - **Synchronous fast path**: Non-async code runs at full speed
+
+For `seq/for` comprehensions, expect approximately 8-10x overhead compared to
+`clojure.core/for` for pure synchronous iteration (~100ns per element). This
+overhead becomes negligible when the body performs actual async work (I/O,
+network calls).
+
+Run benchmarks with:
+```bash
+clojure -M:bench -m is.simm.partial-cps.bench
+```
 
 ## Testing
 

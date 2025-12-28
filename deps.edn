@@ -16,4 +16,7 @@
            :main-opts ["-m" "cljfmt.main" "check" "src" "test"]}
 
   :ffix {:extra-deps {cljfmt/cljfmt {:mvn/version "0.9.2"}}
-         :main-opts ["-m" "cljfmt.main" "fix" "src" "test"]}}}
+         :main-opts ["-m" "cljfmt.main" "fix" "src" "test"]}
+
+  :bench {:extra-paths ["test"]
+          :extra-deps {criterium/criterium {:mvn/version "0.4.6"}}}}}
