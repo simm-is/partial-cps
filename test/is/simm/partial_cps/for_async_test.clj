@@ -420,3 +420,36 @@
                   1000)]
       ;; Both consumers see full sequence independently
       (is (= [[2 4 6] [2 4 6]] result)))))
+
+;; for-with tests
+
+(deftest test-for-with-empty-breakpoints
+  (testing "for-with with empty breakpoints works like for"
+    (let [result (blocking-test
+                  (async
+                   (let [aseq (seq/for-with {}
+                                [x [1 2 3]]
+                                (* x 2))]
+                     (loop [s aseq acc []]
+                       (if-let [[v rest-s] (await (seq/anext s))]
+                         (recur rest-s (conj acc v))
+                         acc))))
+                  1000)]
+      (is (= [2 4 6] result)))))
+
+(deftest test-for-with-await-in-body
+  (testing "for-with with await in body"
+    (let [result (blocking-test
+                  (async
+                   (let [delayed-double (fn [x]
+                                          (fn [resolve _reject]
+                                            (resolve (* x 2))))
+                         aseq (seq/for-with {}
+                                [x [1 2 3]]
+                                (await (delayed-double x)))]
+                     (loop [s aseq acc []]
+                       (if-let [[v rest-s] (await (seq/anext s))]
+                         (recur rest-s (conj acc v))
+                         acc))))
+                  1000)]
+      (is (= [2 4 6] result)))))

@@ -1,8 +1,9 @@
 (ns is.simm.partial-cps.sequence
   (:refer-clojure :exclude [await first rest sequence transduce into for])
-  (:require [is.simm.partial-cps.async :refer [#?(:clj async) await]])
+  (:require [is.simm.partial-cps.async :as async :refer [#?(:clj async) await]]
+            #?(:clj [is.simm.partial-cps.ioc :as ioc]))
   #?(:cljs (:require-macros [is.simm.partial-cps.async :refer [async]]
-                            [is.simm.partial-cps.sequence :refer [for]])))
+                            [is.simm.partial-cps.sequence :refer [for for-with]])))
 
 (defprotocol PAsyncSeq
   "Protocol for asynchronous sequences.
@@ -304,6 +305,128 @@
                               (if ~result-sym
                                 ~result-sym
                                 (recur (clojure.core/rest ~xs-sym))))))))
+                     ~expr))))]
+
+         (emit-nested groups)))))
+
+#?(:clj
+   (defmacro for-with
+     "Like for, but with additional custom breakpoints for the body expression.
+
+  breakpoints should be a map of qualified symbol to handler var symbol, e.g.:
+    {`my-ns/yield `my-ns/yield-handler}
+
+  The breakpoints are merged with async's await breakpoint, so you can use
+  both await and your custom breakpoints in the body.
+
+  Example with a custom yield breakpoint:
+    (for-with {`my-ns/yield `my-ns/yield-handler}
+      [x [1 2 3]]
+      (do
+        (yield x)
+        (await (fetch x))))"
+     [breakpoints seq-exprs body-expr]
+     (assert (even? (clojure.core/count seq-exprs)) "for-with requires an even number of forms in binding vector")
+
+     (let [;; Merge user breakpoints with async's breakpoints
+           merged-breakpoints (merge async/breakpoints breakpoints)
+
+           ;; Helper to emit CPS-wrapped generator function
+           ;; This replicates what the async macro does, but with custom breakpoints
+           emit-cps-fn
+           (fn [body-form]
+             (let [r (gensym "r__")
+                   e (gensym "e__")
+                   params {:r r :e e :env &env :breakpoints merged-breakpoints}]
+               `(fn [~r ~e]
+                  (try
+                    (if async/*in-trampoline*
+                      ~(ioc/invert params body-form)
+                      (binding [async/*in-trampoline* true]
+                        (loop [result# ~(ioc/invert params body-form)]
+                          (if (instance? is.simm.partial_cps.runtime.Thunk result#)
+                            (recur ((.-f ^is.simm.partial_cps.runtime.Thunk result#)))
+                            result#))))
+                    (catch ~(if (:js-globals &env) :default `Throwable) t# (~e t#))))))
+
+           ;; Group bindings with their modifiers
+           to-groups (fn [seq-exprs]
+                       (clojure.core/reduce
+                        (fn [groups [k v]]
+                          (if (keyword? k)
+                            (let [last-group (clojure.core/peek groups)
+                                  rest-groups (clojure.core/pop groups)]
+                              (clojure.core/conj rest-groups
+                                                 (clojure.core/concat last-group [k v])))
+                            (clojure.core/conj groups [k v])))
+                        [] (clojure.core/partition 2 seq-exprs)))
+
+           groups (to-groups seq-exprs)]
+
+       (let [emit-nested
+             (fn emit-nested [remaining-groups]
+               (let [[bind expr & mod-pairs] (clojure.core/first remaining-groups)
+                     next-groups (clojure.core/rest remaining-groups)
+                     items-sym (gensym "items__")
+                     xs-sym (gensym "xs__")
+                     result-sym (gensym "result__")
+
+                     process-modifiers
+                     (fn process-modifiers [remaining-mods continuation skip-continuation]
+                       (if (seq remaining-mods)
+                         (let [k (clojure.core/first remaining-mods)
+                               v (clojure.core/second remaining-mods)
+                               more-mods (clojure.core/drop 2 remaining-mods)]
+                           (case k
+                             :let `(let ~v ~(process-modifiers more-mods continuation skip-continuation))
+                             :while `(when ~v ~(process-modifiers more-mods continuation skip-continuation))
+                             :when `(if ~v
+                                      ~(process-modifiers more-mods continuation skip-continuation)
+                                      ~skip-continuation)
+                             (throw (ex-info (str "Invalid 'for' keyword: " k) {:keyword k}))))
+                         continuation))]
+
+                 (if (seq next-groups)
+                   ;; Nested case
+                   (let [state-sym (gensym "state__")
+                         inner-s-sym (gensym "inner__")
+                         v-sym (gensym "v__")
+                         next-inner-sym (gensym "next_inner__")]
+                     `(make-generator-seq
+                       (fn [~state-sym]
+                         ~(emit-cps-fn
+                           `(loop [[~xs-sym ~inner-s-sym] ~state-sym]
+                              (cond
+                                ~inner-s-sym
+                                (if-let [[~v-sym ~next-inner-sym] (await (anext ~inner-s-sym))]
+                                  [~v-sym [~xs-sym ~next-inner-sym]]
+                                  (recur [(clojure.core/rest ~xs-sym) nil]))
+
+                                (seq ~xs-sym)
+                                (let [~bind (clojure.core/first ~xs-sym)
+                                      new-inner# ~(process-modifiers mod-pairs
+                                                                     (emit-nested next-groups)
+                                                                     nil)]
+                                  (if new-inner#
+                                    (recur [~xs-sym new-inner#])
+                                    (recur [(clojure.core/rest ~xs-sym) nil])))
+
+                                :else nil))))
+                       [~expr nil]))
+
+                   ;; Base case - single binding (innermost)
+                   `(make-generator-seq
+                     (fn [~items-sym]
+                       ~(emit-cps-fn
+                         `(loop [~xs-sym ~items-sym]
+                            (when-let [~xs-sym (seq ~xs-sym)]
+                              (let [~bind (clojure.core/first ~xs-sym)
+                                    ~result-sym ~(process-modifiers mod-pairs
+                                                                    (vector body-expr `(clojure.core/rest ~xs-sym))
+                                                                    nil)]
+                                (if ~result-sym
+                                  ~result-sym
+                                  (recur (clojure.core/rest ~xs-sym))))))))
                      ~expr))))]
 
          (emit-nested groups)))))

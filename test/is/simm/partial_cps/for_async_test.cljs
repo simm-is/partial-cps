@@ -3,7 +3,7 @@
             [is.simm.partial-cps.sequence :as seq]
             [is.simm.partial-cps.async :refer [await]])
   (:require-macros [is.simm.partial-cps.async :refer [async]]
-                   [is.simm.partial-cps.sequence :refer [for]]))
+                   [is.simm.partial-cps.sequence :refer [for for-with]]))
 
 ;; Test helpers
 (defn async-cb-delay
@@ -203,6 +203,37 @@
                                     (recur rest-s (conj acc v))
                                     acc))]
                   (is (= [[2 4 6] [2 4 6]] [consumer1 consumer2]))))
+               (fn [_v] (done))
+               (fn [err] (is false (str "Unexpected error: " err)) (done)))))
+
+;; for-with tests
+
+(defn trace
+  "A simple breakpoint that logs values and passes them through.
+   Used to test for-with with custom breakpoints."
+  [value]
+  (throw (ex-info "trace called outside of CPS scope" {:value value})))
+
+(defn trace-handler
+  "Handler for trace breakpoint - just passes the value through."
+  [ctx r e]
+  (fn [args]
+    (let [value (first args)]
+      `(~r ~value))))
+
+(deftest test-for-with-custom-breakpoint
+  (test/async done
+              ((async
+                (let [traced-values (atom [])
+                      ;; Use for-with with empty breakpoints (just uses await)
+                      aseq (seq/for-with {}
+                             [x [1 2 3]]
+                             (await (async-cb-delay 10 (* x 2))))]
+                  (loop [s aseq
+                         acc []]
+                    (if-let [[v rest-s] (await (seq/anext s))]
+                      (recur rest-s (conj acc v))
+                      (is (= [2 4 6] acc))))))
                (fn [_v] (done))
                (fn [err] (is false (str "Unexpected error: " err)) (done)))))
 
