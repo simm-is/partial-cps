@@ -24,6 +24,79 @@
   PAsyncSeq
   (anext [_] (async nil)))
 
+;; =============================================================================
+;; Extend PAsyncSeq to regular Clojure/ClojureScript sequences
+;; This allows mixing sync and async sources in for comprehensions
+;; =============================================================================
+
+#?(:clj
+   (extend-protocol PAsyncSeq
+     ;; Vectors - very common, handle directly
+     clojure.lang.IPersistentVector
+     (anext [v]
+       (fn [resolve _reject]
+         (if (seq v)
+           (resolve [(clojure.core/first v) (subvec v 1)])
+           (resolve nil))))
+
+     ;; Lazy sequences and lists
+     clojure.lang.ISeq
+     (anext [s]
+       (fn [resolve _reject]
+         (if-let [s (seq s)]
+           (resolve [(clojure.core/first s) (clojure.core/rest s)])
+           (resolve nil))))
+
+     ;; General seqable things (sets, maps as seq of entries, etc.)
+     clojure.lang.Seqable
+     (anext [coll]
+       (fn [resolve _reject]
+         (if-let [s (seq coll)]
+           (resolve [(clojure.core/first s) (clojure.core/rest s)])
+           (resolve nil)))))
+
+   :cljs
+   (do
+     (extend-type cljs.core/PersistentVector
+       PAsyncSeq
+       (anext [v]
+         (fn [resolve _reject]
+           (if (seq v)
+             (resolve [(clojure.core/first v) (subvec v 1)])
+             (resolve nil)))))
+
+     (extend-type cljs.core/List
+       PAsyncSeq
+       (anext [s]
+         (fn [resolve _reject]
+           (if-let [s (seq s)]
+             (resolve [(clojure.core/first s) (clojure.core/rest s)])
+             (resolve nil)))))
+
+     (extend-type cljs.core/LazySeq
+       PAsyncSeq
+       (anext [s]
+         (fn [resolve _reject]
+           (if-let [s (seq s)]
+             (resolve [(clojure.core/first s) (clojure.core/rest s)])
+             (resolve nil)))))
+
+     (extend-type cljs.core/IndexedSeq
+       PAsyncSeq
+       (anext [s]
+         (fn [resolve _reject]
+           (if-let [s (seq s)]
+             (resolve [(clojure.core/first s) (clojure.core/rest s)])
+             (resolve nil)))))
+
+     (extend-type cljs.core/Range
+       PAsyncSeq
+       (anext [r]
+         (fn [resolve _reject]
+           (if (seq r)
+             (resolve [(clojure.core/first r) (clojure.core/rest r)])
+             (resolve nil)))))))
+
 (defn first
   "Returns async expression yielding first element, or nil if empty.
 
@@ -257,11 +330,14 @@
                          continuation))]
 
                  (if (seq next-groups)
-                   ;; Nested case - have more bindings to process
+                   ;; Nested case - have more bindings to process, uses anext for async sources
+                   ;; State is [rest-of-outer inner-seq] where rest-of-outer is what remains
+                   ;; after consuming the current outer element
                    (let [state-sym (gensym "state__")
                          inner-s-sym (gensym "inner__")
                          v-sym (gensym "v__")
-                         next-inner-sym (gensym "next_inner__")]
+                         next-inner-sym (gensym "next_inner__")
+                         rest-xs-sym (gensym "rest_xs__")]
                      `(make-generator-seq
                        (fn [~state-sym]
                          (async
@@ -270,70 +346,109 @@
                               ;; Case 1: Have active inner sequence - consume it
                               ~inner-s-sym
                               (if-let [[~v-sym ~next-inner-sym] (await (anext ~inner-s-sym))]
-                                ;; Yield from inner, keep outer position
+                                ;; Yield from inner, keep outer position for when inner exhausts
                                 [~v-sym [~xs-sym ~next-inner-sym]]
-                                ;; Inner exhausted, advance outer
-                                (recur [(clojure.core/rest ~xs-sym) nil]))
+                                ;; Inner exhausted, continue with next outer element
+                                ;; xs-sym is already the rest after current outer, just need new inner
+                                (recur [~xs-sym nil]))
 
-                              ;; Case 2: Need to create new inner sequence for current outer element
-                              (seq ~xs-sym)
-                              (let [~bind (clojure.core/first ~xs-sym)
-                                    new-inner# ~(process-modifiers mod-pairs
-                                                                   ;; Create inner sequence for current binding
-                                                                   (emit-nested next-groups)
-                                                                   ;; Skip to next outer element if filter fails
-                                                                   nil)]
-                                (if new-inner#
-                                  (recur [~xs-sym new-inner#])
-                                  ;; Modifier filtered, try next outer
-                                  (recur [(clojure.core/rest ~xs-sym) nil])))
-
-                              ;; Case 3: All exhausted
-                              :else nil))))
+                              ;; Case 2: No inner - get next element from outer using anext
+                              :else
+                              (if-let [[~bind ~rest-xs-sym] (await (anext ~xs-sym))]
+                                (let [new-inner# ~(process-modifiers mod-pairs
+                                                                     ;; Create inner sequence for current binding
+                                                                     (emit-nested next-groups)
+                                                                     ;; Skip to next outer element if filter fails
+                                                                     nil)]
+                                  (if new-inner#
+                                    ;; Store rest-xs for when inner exhausts
+                                    (recur [~rest-xs-sym new-inner#])
+                                    ;; Modifier filtered, try next
+                                    (recur [~rest-xs-sym nil])))
+                                nil)))))
                        [~expr nil]))
 
-                   ;; Base case - single binding (innermost)
-                   `(make-generator-seq
-                     (fn [~items-sym]
-                       (async
-                        (loop [~xs-sym ~items-sym]
-                          (when-let [~xs-sym (seq ~xs-sym)]
-                            (let [~bind (clojure.core/first ~xs-sym)
-                                  ~result-sym ~(process-modifiers mod-pairs
-                                                                  (vector body-expr `(clojure.core/rest ~xs-sym))
-                                                                  nil)]
-                              (if ~result-sym
-                                ~result-sym
-                                (recur (clojure.core/rest ~xs-sym))))))))
-                     ~expr))))]
+                   ;; Base case - single binding (innermost), uses anext for async sources
+                   (let [rest-xs-sym (gensym "rest_xs__")]
+                     `(make-generator-seq
+                       (fn [~items-sym]
+                         (async
+                          (loop [~xs-sym ~items-sym]
+                            (if-let [[~bind ~rest-xs-sym] (await (anext ~xs-sym))]
+                              (let [~result-sym ~(process-modifiers mod-pairs
+                                                                    (vector body-expr rest-xs-sym)
+                                                                    nil)]
+                                (if ~result-sym
+                                  ~result-sym
+                                  (recur ~rest-xs-sym)))
+                              nil))))
+                       ~expr)))))]
 
          (emit-nested groups)))))
 
 #?(:clj
    (defmacro for-with
-     "Like for, but with additional custom breakpoints for the body expression.
+     "Like for, but with additional custom breakpoints and optional dynamic bindings.
 
-  breakpoints should be a map of qualified symbol to handler var symbol, e.g.:
-    {`my-ns/yield `my-ns/yield-handler}
+  The first argument can be either:
+  - A map of breakpoints: {`my-ns/yield `my-ns/yield-handler}
+  - An options map with :breakpoints and/or :bindings keys
+
+  Options:
+    :breakpoints - Map of qualified symbol to handler var symbol
+    :bindings    - Vector of [var-symbol value-expr] pairs to capture and restore
+                   during CPS execution. Values are captured at sequence creation.
 
   The breakpoints are merged with async's await breakpoint, so you can use
   both await and your custom breakpoints in the body.
 
-  Example with a custom yield breakpoint:
+  Example with breakpoints only (backward compatible):
     (for-with {`my-ns/yield `my-ns/yield-handler}
       [x [1 2 3]]
       (do
         (yield x)
-        (await (fetch x))))"
-     [breakpoints seq-exprs body-expr]
+        (await (fetch x))))
+
+  Example with bindings (for preserving dynamic context):
+    (for-with {:breakpoints (build-breakpoints)
+               :bindings [[*my-context* (current-context)]]}
+      [x [1 2 3]]
+      (do-something-with-context x))"
+     [opts seq-exprs body-expr]
      (assert (even? (clojure.core/count seq-exprs)) "for-with requires an even number of forms in binding vector")
 
-     (let [;; Evaluate breakpoints if it's not already a map (allows passing function calls)
-           evaluated-breakpoints (if (map? breakpoints)
-                                   breakpoints
-                                   (eval breakpoints))
+     (let [;; Parse options - support both plain breakpoints map and options map
+           has-options-keys? (and (map? opts)
+                                  (or (contains? opts :breakpoints)
+                                      (contains? opts :bindings)))
+           raw-breakpoints (if has-options-keys?
+                             (:breakpoints opts {})
+                             opts)
+           bindings-spec (if has-options-keys?
+                           (:bindings opts [])
+                           [])
+
+           ;; Evaluate breakpoints if it's not already a map (allows passing function calls)
+           evaluated-breakpoints (if (map? raw-breakpoints)
+                                   raw-breakpoints
+                                   (eval raw-breakpoints))
            ;; Merge user breakpoints with async's breakpoints
            merged-breakpoints (merge async/breakpoints evaluated-breakpoints)
+
+           ;; Generate symbols for captured binding values
+           ;; bindings-spec is [[var1 expr1] [var2 expr2] ...]
+           binding-captures (mapv (fn [[var-sym _]]
+                                    [(gensym (str (name var-sym) "__captured__"))
+                                     var-sym])
+                                  bindings-spec)
+           ;; Build the let bindings to capture values: [captured-sym1 expr1, ...]
+           capture-bindings (vec (mapcat (fn [[var-sym expr] [captured-sym _]]
+                                           [captured-sym expr])
+                                         bindings-spec binding-captures))
+           ;; Build the binding vector for restoration: [var1 captured1, var2 captured2, ...]
+           restore-bindings (vec (mapcat (fn [[captured-sym var-sym]]
+                                           [var-sym captured-sym])
+                                         binding-captures))
 
            ;; Helper to emit CPS-wrapped generator function
            ;; This replicates what the async macro does, but with custom breakpoints
@@ -341,16 +456,22 @@
            (fn [body-form]
              (let [r (gensym "r__")
                    e (gensym "e__")
-                   params {:r r :e e :env &env :breakpoints merged-breakpoints}]
+                   params {:r r :e e :env &env :breakpoints merged-breakpoints}
+                   ;; Core CPS execution with trampoline
+                   cps-execution `(if async/*in-trampoline*
+                                    ~(ioc/invert params body-form)
+                                    (binding [async/*in-trampoline* true]
+                                      (loop [result# ~(ioc/invert params body-form)]
+                                        (if (instance? is.simm.partial_cps.runtime.Thunk result#)
+                                          (recur ((.-f ^is.simm.partial_cps.runtime.Thunk result#)))
+                                          result#))))
+                   ;; Wrap with user bindings if any
+                   wrapped-execution (if (seq restore-bindings)
+                                       `(binding ~restore-bindings ~cps-execution)
+                                       cps-execution)]
                `(fn [~r ~e]
                   (try
-                    (if async/*in-trampoline*
-                      ~(ioc/invert params body-form)
-                      (binding [async/*in-trampoline* true]
-                        (loop [result# ~(ioc/invert params body-form)]
-                          (if (instance? is.simm.partial_cps.runtime.Thunk result#)
-                            (recur ((.-f ^is.simm.partial_cps.runtime.Thunk result#)))
-                            result#))))
+                    ~wrapped-execution
                     (catch ~(if (:js-globals &env) :default `Throwable) t# (~e t#))))))
 
            ;; Group bindings with their modifiers
@@ -391,47 +512,61 @@
                          continuation))]
 
                  (if (seq next-groups)
-                   ;; Nested case
+                   ;; Nested case - uses anext for async-compatible iteration
+                   ;; State is [rest-of-outer inner-seq] where rest-of-outer is what remains
+                   ;; after consuming the current outer element
                    (let [state-sym (gensym "state__")
                          inner-s-sym (gensym "inner__")
                          v-sym (gensym "v__")
-                         next-inner-sym (gensym "next_inner__")]
+                         next-inner-sym (gensym "next_inner__")
+                         rest-xs-sym (gensym "rest_xs__")]
                      `(make-generator-seq
                        (fn [~state-sym]
                          ~(emit-cps-fn
                            `(loop [[~xs-sym ~inner-s-sym] ~state-sym]
                               (cond
+                                ;; Have inner sequence - consume from it
                                 ~inner-s-sym
                                 (if-let [[~v-sym ~next-inner-sym] (await (anext ~inner-s-sym))]
+                                  ;; Yield from inner, keep outer position for when inner exhausts
                                   [~v-sym [~xs-sym ~next-inner-sym]]
-                                  (recur [(clojure.core/rest ~xs-sym) nil]))
+                                  ;; Inner exhausted, continue with next outer element
+                                  ;; xs-sym is already the rest after current outer, just need new inner
+                                  (recur [~xs-sym nil]))
 
-                                (seq ~xs-sym)
-                                (let [~bind (clojure.core/first ~xs-sym)
-                                      new-inner# ~(process-modifiers mod-pairs
-                                                                     (emit-nested next-groups)
-                                                                     nil)]
-                                  (if new-inner#
-                                    (recur [~xs-sym new-inner#])
-                                    (recur [(clojure.core/rest ~xs-sym) nil])))
-
-                                :else nil))))
+                                ;; No inner - get next element from outer using anext
+                                :else
+                                (if-let [[~bind ~rest-xs-sym] (await (anext ~xs-sym))]
+                                  (let [new-inner# ~(process-modifiers mod-pairs
+                                                                       (emit-nested next-groups)
+                                                                       nil)]
+                                    (if new-inner#
+                                      ;; Store rest-xs for when inner exhausts
+                                      (recur [~rest-xs-sym new-inner#])
+                                      ;; Modifier filtered, try next
+                                      (recur [~rest-xs-sym nil])))
+                                  nil)))))
                        [~expr nil]))
 
-                   ;; Base case - single binding (innermost)
-                   `(make-generator-seq
-                     (fn [~items-sym]
-                       ~(emit-cps-fn
-                         `(loop [~xs-sym ~items-sym]
-                            (when-let [~xs-sym (seq ~xs-sym)]
-                              (let [~bind (clojure.core/first ~xs-sym)
-                                    ~result-sym ~(process-modifiers mod-pairs
-                                                                    (vector body-expr `(clojure.core/rest ~xs-sym))
-                                                                    nil)]
-                                (if ~result-sym
-                                  ~result-sym
-                                  (recur (clojure.core/rest ~xs-sym))))))))
-                     ~expr))))]
+                   ;; Base case - single binding (innermost), uses anext
+                   (let [rest-xs-sym (gensym "rest_xs__")]
+                     `(make-generator-seq
+                       (fn [~items-sym]
+                         ~(emit-cps-fn
+                           `(loop [~xs-sym ~items-sym]
+                              (if-let [[~bind ~rest-xs-sym] (await (anext ~xs-sym))]
+                                (let [~result-sym ~(process-modifiers mod-pairs
+                                                                      (vector body-expr rest-xs-sym)
+                                                                      nil)]
+                                  (if ~result-sym
+                                    ~result-sym
+                                    (recur ~rest-xs-sym)))
+                                nil))))
+                       ~expr)))))]
 
-         (emit-nested groups)))))
+         ;; Wrap with capture bindings if any
+         (if (seq capture-bindings)
+           `(let ~capture-bindings
+              ~(emit-nested groups))
+           (emit-nested groups))))))
 
