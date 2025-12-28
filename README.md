@@ -78,21 +78,22 @@ Errors propagate naturally through the async chain:
 
 ### Iteration with Async Operations
 
-Standard Clojure iteration macros work transparently with async operations:
+Standard Clojure iteration macros work transparently with async operations,
+including `await` in modifiers:
 
 ```clojure
-;; doseq - process items sequentially
+;; doseq - process items sequentially (regular sequences only)
 (async
   (doseq [item (await fetch-items)]
     (println "Processing:" item)
     (await (process-item item))))
 
-;; doseq with modifiers (:let, :when, :while)
+;; doseq with await in modifiers (:let, :when, :while)
 (async
   (doseq [x [1 2 3 4 5]
-          :when (even? x)
-          :let [doubled (* x 2)]]
-    (await (save-value doubled))))
+          :when (await (check-allowed? x))
+          :let [processed (await (transform x))]]
+    (await (save-value processed))))
 
 ;; dotimes - counted iteration
 (async
@@ -108,28 +109,41 @@ Standard Clojure iteration macros work transparently with async operations:
       (process result))))
 ```
 
+Note: `doseq` can only iterate over regular Clojure sequences. For async
+sequence sources (`PAsyncSeq`), use `seq/for` below.
+
 ### Async Sequence Comprehension
 
-For lazy async sequences, use `seq/for`:
+For lazy async sequences, use `seq/for`. Unlike `doseq`, it can iterate over
+both regular sequences and async sequences (`PAsyncSeq`), and supports `await`
+in the body and modifiers:
 
 ```clojure
 (require '[is.simm.partial-cps.sequence :as seq])
 
-;; Create lazy async sequence
-(async
-  (let [results (seq/for [item (await fetch-items)]
-                  (await (process-item item)))]
-    ;; Consume the lazy sequence
-    (await (seq/into [] results))))
+;; Iterate over regular sequences with async body
+(seq/for [x [1 2 3]]
+  (await (process x)))
 
-;; Nested iteration with modifiers
+;; Iterate over async sequences (PAsyncSeq)
+(seq/for [item async-seq]
+  (process item))
+
+;; Mix sync and async sources
+(seq/for [x [1 2 3]
+          y async-seq]
+  [x y])
+
+;; Await in modifiers
+(seq/for [x some-seq
+          :when (await (async-filter? x))
+          :let [y (await (async-transform x))]]
+  y)
+
+;; Consume the lazy result
 (async
-  (let [pairs (seq/for [x [1 2 3]
-                        y [10 20 30]
-                        :when (even? (+ x y))
-                        :let [sum (+ x y)]]
-                (await (process sum)))]
-    (await (seq/into [] pairs))))
+  (let [results (seq/for [x data] (await (process x)))]
+    (await (seq/into [] results))))
 ```
 
 ### Async Sequences
@@ -316,7 +330,8 @@ The library integrates well with standard test frameworks:
   - `(anext this)` - Return async expression yielding `[value rest-seq]` or nil if exhausted
 - `(first async-seq)` - Get first element (async)
 - `(rest async-seq)` - Get rest of sequence (async)
-- `(for bindings & body)` - Async sequence comprehension, supports `:let`, `:when`, `:while` modifiers
+- `(for bindings body)` - Async sequence comprehension over sync/async sources, supports `:let`, `:when`, `:while` modifiers with `await`
+- `(for-with opts bindings body)` - Like `for` with custom `:breakpoints` and `:bindings` options
 - `(transduce xform f init async-seq)` - Eagerly transduce
 - `(into to xform? async-seq)` - Pour into collection
 - `(sequence xform async-seq)` - Lazy transformation
