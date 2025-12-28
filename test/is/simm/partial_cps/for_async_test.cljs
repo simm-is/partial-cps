@@ -26,28 +26,7 @@
                (fn [_v] (done))
                (fn [err] (is false (str "Unexpected error: " err)) (done)))))
 
-;; DISABLED: ClojureScript compiler bug with nested macro contexts
-;; When `await` appears inside the `for` body expression within nested macro contexts
-;; (test/async → async → for), the ClojureScript analyzer replaces the binding
-;; variable `x` with a gensym, causing it to be undeclared in the body expression.
-;;
-;; Compilation warning:
-;;   Use of undeclared Var is.simm.partial-cps.for-async-test/x
-;;
-;; Runtime error:
-;;   Expected: (= [2 4 6] acc)
-;;   Actual:   (= [2 4 6] [##NaN ##NaN ##NaN])
-;;
-;; This test works perfectly in Clojure (see for_async_test.clj).
-;; The issue is specific to ClojureScript's analyzer handling of deeply nested macros.
-;;
-;; Root cause: The binding vector structure is corrupted before the `for` macro
-;; expansion can extract the binding symbols. ClojureScript's analyzer transforms
-;; the code in a way that breaks symbol resolution in nested macro contexts.
-;;
-;; Workaround: Pre-evaluate await outside the for comprehension, or use simpler
-;; nesting (avoid test/async → async → for with await in body).
-#_(deftest test-for-with-await
+(deftest test-for-with-await
     (test/async done
                 ((async
                   (let [aseq (for [x [1 2 3]]
@@ -166,47 +145,36 @@
                (fn [err] (is false (str "Unexpected error: " err)) (done)))))
 
 ;; Await in various positions
-;; NOTE: ClojureScript compiler bug - when `await` (or any function call) appears
-;; inside :when/:while modifiers, the ClojureScript analyzer replaces the binding
-;; vector with a gensym before the `for` macro expansion, causing:
-;;   UnsupportedOperationException: count not supported on this type: Symbol
-;;
-;; Root cause: ClojureScript's code analyzer transforms nested macro contexts
-;; (test/async → async → for) in a way that corrupts the binding vector structure.
-;; The binding vector [x coll :when (await ...)] becomes a Symbol (e.g., G__9722).
-;;
-;; These tests work perfectly in Clojure. See for_async_test.clj for full coverage.
-;; Workaround: Pre-evaluate await outside the for comprehension.
 
-#_(deftest test-for-await-in-when
-    (test/async done
-                ((async
-                  (let [async-odd? (fn [x] (async-cb-delay 10 (odd? x)))
-                        aseq (for [x [1 2 3 4 5]
-                                   :when (await (async-odd? x))]
-                               x)]
-                    (loop [s aseq
-                           acc []]
-                      (if-let [[v rest-s] (await (seq/anext s))]
-                        (recur rest-s (conj acc v))
-                        (is (= [1 3 5] acc))))))
-                 (fn [_v] (done))
-                 (fn [err] (is false (str "Unexpected error: " err)) (done)))))
+(deftest test-for-await-in-when
+  (test/async done
+              ((async
+                (let [async-odd? (fn [x] (async-cb-delay 10 (odd? x)))
+                      aseq (for [x [1 2 3 4 5]
+                                 :when (await (async-odd? x))]
+                             x)]
+                  (loop [s aseq
+                         acc []]
+                    (if-let [[v rest-s] (await (seq/anext s))]
+                      (recur rest-s (conj acc v))
+                      (is (= [1 3 5] acc))))))
+               (fn [_v] (done))
+               (fn [err] (is false (str "Unexpected error: " err)) (done)))))
 
-#_(deftest test-for-await-in-sequence-expr
-    (test/async done
-                ((async
-                  (let [async-range (fn [n] (async-cb-delay 10 (range n)))
-                        aseq (for [x (await (async-range 5))
-                                   :when (even? x)]
-                               (* x 10))]
-                    (loop [s aseq
-                           acc []]
-                      (if-let [[v rest-s] (await (seq/anext s))]
-                        (recur rest-s (conj acc v))
-                        (is (= [0 20 40] acc))))))
-                 (fn [_v] (done))
-                 (fn [err] (is false (str "Unexpected error: " err)) (done)))))
+(deftest test-for-await-in-sequence-expr
+  (test/async done
+              ((async
+                (let [async-range (fn [n] (async-cb-delay 10 (range n)))
+                      aseq (for [x (await (async-range 5))
+                                 :when (even? x)]
+                             (* x 10))]
+                  (loop [s aseq
+                         acc []]
+                    (if-let [[v rest-s] (await (seq/anext s))]
+                      (recur rest-s (conj acc v))
+                      (is (= [0 20 40] acc))))))
+               (fn [_v] (done))
+               (fn [err] (is false (str "Unexpected error: " err)) (done)))))
 
 ;; Immutability tests
 

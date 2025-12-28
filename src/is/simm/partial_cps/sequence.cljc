@@ -1,7 +1,8 @@
 (ns is.simm.partial-cps.sequence
   (:refer-clojure :exclude [await first rest sequence transduce into for])
   (:require [is.simm.partial-cps.async :refer [#?(:clj async) await]])
-  #?(:cljs (:require-macros [is.simm.partial-cps.async :refer [async]])))
+  #?(:cljs (:require-macros [is.simm.partial-cps.async :refer [async]]
+                            [is.simm.partial-cps.sequence :refer [for]])))
 
 (defprotocol PAsyncSeq
   "Protocol for asynchronous sequences.

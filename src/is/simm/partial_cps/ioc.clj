@@ -8,7 +8,7 @@
   ((resolve 'cljs.analyzer/resolve-var) env sym))
 
 (defn resolve-macro-var-cljs [env sym]
-  ;; in cljs compilation  
+  ;; in cljs compilation
   (require 'cljs.analyzer)
   ((resolve 'cljs.analyzer/resolve-macro-var) env sym))
 
@@ -32,10 +32,11 @@
     (let [sym (first form)]
       (if (:js-globals env)
         ;; ClojureScript
-        (when (:macro (resolve-macro-var-cljs env sym))
-          (let [expanded (apply (resolve (:name (resolve-macro-var-cljs env sym)))
-                                form env (rest form))]
-            [expanded true]))
+        (let [macro-info (resolve-macro-var-cljs env sym)]
+          (when (:macro macro-info)
+            (let [expanded (apply (resolve (:name macro-info))
+                                  form env (rest form))]
+              [expanded true])))
         ;; Clojure
         (when-let [resolved (resolve env sym)]
           (when (.isMacro resolved)
@@ -58,19 +59,14 @@
                                  [form ctx]))
         sym (when (seq? form-to-check) (first form-to-check))
         resolved-sym (var-name env sym)
-        has-term? (contains? breakpoints resolved-sym)
-        is-nested-async? (or (= resolved-sym 'is.simm.partial-cps.async/async)
-                             (= sym 'is.simm.partial-cps.async/async))]
+        has-term? (contains? breakpoints resolved-sym)]
     (cond
       has-term? true
 
       (and recur-target (= 'recur sym)) true
 
-      ;; Don't recurse into nested async blocks - they handle their own breakpoints
-      is-nested-async? false
-
       ;; If we just expanded this form and it's different, recurse to check the expansion
-      (and (not= form form-to-check) (not has-term?) (not is-nested-async?))
+      (and (not= form form-to-check) (not has-term?))
       (has-breakpoints? form-to-check ctx')
 
       (= 'loop* sym) (some #(has-breakpoints? % (dissoc ctx' :recur-target)) (rest form-to-check))
