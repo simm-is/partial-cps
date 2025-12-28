@@ -328,8 +328,12 @@
      [breakpoints seq-exprs body-expr]
      (assert (even? (clojure.core/count seq-exprs)) "for-with requires an even number of forms in binding vector")
 
-     (let [;; Merge user breakpoints with async's breakpoints
-           merged-breakpoints (merge async/breakpoints breakpoints)
+     (let [;; Evaluate breakpoints if it's not already a map (allows passing function calls)
+           evaluated-breakpoints (if (map? breakpoints)
+                                   breakpoints
+                                   (eval breakpoints))
+           ;; Merge user breakpoints with async's breakpoints
+           merged-breakpoints (merge async/breakpoints evaluated-breakpoints)
 
            ;; Helper to emit CPS-wrapped generator function
            ;; This replicates what the async macro does, but with custom breakpoints
