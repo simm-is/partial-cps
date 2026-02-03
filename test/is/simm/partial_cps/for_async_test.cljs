@@ -27,17 +27,17 @@
                (fn [err] (is false (str "Unexpected error: " err)) (done)))))
 
 (deftest test-for-with-await
-    (test/async done
-                ((async
-                  (let [aseq (for [x [1 2 3]]
-                               (await (async-cb-delay 10 (* x 2))))]
-                    (loop [s aseq
-                           acc []]
-                      (if-let [[v rest-s] (await (seq/anext s))]
-                        (recur rest-s (conj acc v))
-                        (is (= [2 4 6] acc))))))
-                 (fn [_v] (done))
-                 (fn [err] (is false (str "Unexpected error: " err)) (done)))))
+  (test/async done
+              ((async
+                (let [aseq (for [x [1 2 3]]
+                             (await (async-cb-delay 10 (* x 2))))]
+                  (loop [s aseq
+                         acc []]
+                    (if-let [[v rest-s] (await (seq/anext s))]
+                      (recur rest-s (conj acc v))
+                      (is (= [2 4 6] acc))))))
+               (fn [_v] (done))
+               (fn [err] (is false (str "Unexpected error: " err)) (done)))))
 
 (deftest test-for-empty-seq
   (test/async done
@@ -227,8 +227,8 @@
                 (let [traced-values (atom [])
                       ;; Use for-with with empty breakpoints (just uses await)
                       aseq (seq/for-with {}
-                             [x [1 2 3]]
-                             (await (async-cb-delay 10 (* x 2))))]
+                                         [x [1 2 3]]
+                                         (await (async-cb-delay 10 (* x 2))))]
                   (loop [s aseq
                          acc []]
                     (if-let [[v rest-s] (await (seq/anext s))]

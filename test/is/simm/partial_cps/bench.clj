@@ -18,13 +18,13 @@
 
   (println "--- clojure.core/for ---")
   (crit/bench
-    (doall (for [x (range 1000)] (inc x))))
+   (doall (for [x (range 1000)] (inc x))))
 
   (println "\n--- seq/for ---")
   (crit/bench
-    (run-cps-fn
-      (seq/into []
-        (seq/for [x (range 1000)] (inc x))))))
+   (run-cps-fn
+    (seq/into []
+              (seq/for [x (range 1000)] (inc x))))))
 
 (defn bench-nested-binding
   "Benchmark nested bindings with filter."
@@ -33,19 +33,19 @@
 
   (println "--- clojure.core/for ---")
   (crit/bench
-    (doall (for [x (range 100)
-                 y (range 10)
-                 :when (even? (* x y))]
-             (+ x y))))
+   (doall (for [x (range 100)
+                y (range 10)
+                :when (even? (* x y))]
+            (+ x y))))
 
   (println "\n--- seq/for ---")
   (crit/bench
-    (run-cps-fn
-      (seq/into []
-        (seq/for [x (range 100)
-                  y (range 10)
-                  :when (even? (* x y))]
-          (+ x y))))))
+   (run-cps-fn
+    (seq/into []
+              (seq/for [x (range 100)
+                        y (range 10)
+                        :when (even? (* x y))]
+                (+ x y))))))
 
 (defn bench-with-computation
   "Benchmark with some computation in the body."
@@ -54,21 +54,21 @@
 
   (println "--- clojure.core/for ---")
   (crit/bench
-    (doall (for [x (range 100)
-                 y (range 10)
-                 :let [z (* x y)]
-                 :when (even? z)]
-             (+ z (mod z 7)))))
+   (doall (for [x (range 100)
+                y (range 10)
+                :let [z (* x y)]
+                :when (even? z)]
+            (+ z (mod z 7)))))
 
   (println "\n--- seq/for ---")
   (crit/bench
-    (run-cps-fn
-      (seq/into []
-        (seq/for [x (range 100)
-                  y (range 10)
-                  :let [z (* x y)]
-                  :when (even? z)]
-          (+ z (mod z 7)))))))
+   (run-cps-fn
+    (seq/into []
+              (seq/for [x (range 100)
+                        y (range 10)
+                        :let [z (* x y)]
+                        :when (even? z)]
+                (+ z (mod z 7)))))))
 
 (defn -main
   "Run all benchmarks."

@@ -88,13 +88,13 @@
       (if (:js-globals &env)
         ;; CLJS - use cljs.test/async
         `(cljs.test/async done#
-           (~async-expr
-            (fn [result#]
-              (cljs.test/is (= ~expected result#))
-              (done#))
-            (fn [err#]
-              (cljs.test/is false (str "Unexpected error: " err#))
-              (done#))))
+                          (~async-expr
+                           (fn [result#]
+                             (cljs.test/is (= ~expected result#))
+                             (done#))
+                           (fn [err#]
+                             (cljs.test/is false (str "Unexpected error: " err#))
+                             (done#))))
         ;; CLJ - use promise-based blocking
         `(let [result# (promise)
                error# (promise)]
@@ -134,17 +134,17 @@
         (if (:js-globals &env)
           ;; CLJS
           `(cljs.test/async done#
-             (~async-expr
-              (fn [result#]
-                (cljs.test/is false (str "Expected error, got: " result#))
-                (done#))
-              (fn [~err-sym]
-                (cljs.test/is true "Got expected error")
-                ~(when error-pattern
-                   `(cljs.test/is (clojure.string/includes?
-                                   (or (.-message ~err-sym) (str ~err-sym))
-                                   ~error-pattern)))
-                (done#))))
+                            (~async-expr
+                             (fn [result#]
+                               (cljs.test/is false (str "Expected error, got: " result#))
+                               (done#))
+                             (fn [~err-sym]
+                               (cljs.test/is true "Got expected error")
+                               ~(when error-pattern
+                                  `(cljs.test/is (clojure.string/includes?
+                                                  (or (.-message ~err-sym) (str ~err-sym))
+                                                  ~error-pattern)))
+                               (done#))))
           ;; CLJ
           `(let [result# (promise)
                  error# (promise)]
@@ -184,13 +184,13 @@
       (if (:js-globals &env)
         ;; CLJS
         `(cljs.test/async done#
-           (~async-expr
-            (fn [result#]
-              (~assert-fn result#)
-              (done#))
-            (fn [err#]
-              (cljs.test/is false (str "Unexpected error: " err#))
-              (done#))))
+                          (~async-expr
+                           (fn [result#]
+                             (~assert-fn result#)
+                             (done#))
+                           (fn [err#]
+                             (cljs.test/is false (str "Unexpected error: " err#))
+                             (done#))))
         ;; CLJ
         `(let [result# (promise)
                error# (promise)]

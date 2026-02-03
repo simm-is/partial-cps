@@ -428,8 +428,8 @@
     (let [result (blocking-test
                   (async
                    (let [aseq (seq/for-with {}
-                                [x [1 2 3]]
-                                (* x 2))]
+                                            [x [1 2 3]]
+                                            (* x 2))]
                      (loop [s aseq acc []]
                        (if-let [[v rest-s] (await (seq/anext s))]
                          (recur rest-s (conj acc v))
@@ -445,8 +445,8 @@
                                           (fn [resolve _reject]
                                             (resolve (* x 2))))
                          aseq (seq/for-with {}
-                                [x [1 2 3]]
-                                (await (delayed-double x)))]
+                                            [x [1 2 3]]
+                                            (await (delayed-double x)))]
                      (loop [s aseq acc []]
                        (if-let [[v rest-s] (await (seq/anext s))]
                          (recur rest-s (conj acc v))

@@ -73,6 +73,12 @@
              (resolve [(clojure.core/first s) (clojure.core/rest s)])
              (resolve nil)))))
 
+     (extend-type cljs.core/EmptyList
+       PAsyncSeq
+       (anext [s]
+         (fn [resolve _reject]
+           (resolve nil))))
+
      (extend-type cljs.core/LazySeq
        PAsyncSeq
        (anext [s]
