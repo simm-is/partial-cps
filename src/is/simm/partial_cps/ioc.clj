@@ -124,7 +124,14 @@
         ;; Use plain 'binding' symbol for restoration (works in both CLJ and CLJS)
         binding-sym 'binding]
     (if (has-breakpoints? `(do ~@body) ctx)
-      ;; Body has breakpoints - need to wrap continuations
+      ;; Body has breakpoints - need to wrap continuations.
+      ;; IMPORTANT: Do NOT macro-expand the binding form into push/pop-thread-bindings
+      ;; and then CPS-transform the expansion. That causes push on Thread A but pop
+      ;; (via CPS finally) on Thread B when await suspends — "Pop without matching push".
+      ;; Instead, wrap the CPS-transformed body in the original binding form so that
+      ;; push/pop are balanced on the calling thread. When await suspends, the binding
+      ;; scope exits normally. Continuations fire outside this scope; wrapped-r/wrapped-e
+      ;; restore outer binding values.
       `(let [~@(interleave saved-syms var-syms)
              ;; Wrapped resolve - restores outer bindings before calling original r
              ~wrapped-r (fn [val#]
@@ -134,13 +141,10 @@
              ~wrapped-e (fn [err#]
                           (~binding-sym [~@(interleave var-syms saved-syms)]
                                         (~e err#)))]
-         ;; Transform the EXPANDED binding form with wrapped continuations
-         ~(invert (assoc ctx :r wrapped-r :e wrapped-e)
-                  ;; Expand the binding macro and transform the expansion
-                  (apply (if (:js-globals env)
-                           (resolve (:name (resolve-macro-var-cljs env macro-sym)))
-                           (resolve env macro-sym))
-                         form env (rest form))))
+         ;; Establish bindings for sync execution, CPS-transform just the body
+         (~macro-sym ~bindings
+           ~(invert (assoc ctx :r wrapped-r :e wrapped-e)
+                    `(do ~@body))))
       ;; No breakpoints in body - just expand normally
       (recur ctx
              (apply (if (:js-globals env)
