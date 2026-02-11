@@ -44,36 +44,44 @@
               [expanded true])))))))
 
 (defn has-breakpoints?
-  [form {:keys [breakpoints recur-target env expansion-cache] :as ctx}]
-  ;; Check cache first, then expand if needed
-  (let [[form-to-check ctx'] (if-let [cached (when expansion-cache (get @expansion-cache form))]
-                               [cached ctx]
-                                ;; Not in cache, try to expand
-                               (if-let [[expanded _] (expand-macro form env)]
-                                 (do
-                                   (when expansion-cache
-                                     (swap! expansion-cache assoc form expanded))
-                                    ;; Recursively check the expansion
-                                   [expanded ctx])
-                                  ;; Not a macro, use form as-is
-                                 [form ctx]))
-        sym (when (seq? form-to-check) (first form-to-check))
-        resolved-sym (var-name env sym)
-        has-term? (contains? breakpoints resolved-sym)]
-    (cond
-      has-term? true
+  [form {:keys [breakpoints recur-target env expansion-cache breakpoint-cache] :as ctx}]
+  ;; Check breakpoint-cache first to avoid redundant sub-tree traversals.
+  ;; Cache key includes recur-target presence since it affects whether `recur` is a breakpoint.
+  (let [cache-key (when breakpoint-cache [form (some? recur-target)])]
+    (if-let [cached-result (when cache-key (get @breakpoint-cache cache-key))]
+      cached-result
+      (let [[form-to-check ctx'] (if-let [cached (when expansion-cache (get @expansion-cache form))]
+                                   [cached ctx]
+                                    ;; Not in cache, try to expand
+                                   (if-let [[expanded _] (expand-macro form env)]
+                                     (do
+                                       (when expansion-cache
+                                         (swap! expansion-cache assoc form expanded))
+                                        ;; Recursively check the expansion
+                                       [expanded ctx])
+                                      ;; Not a macro, use form as-is
+                                     [form ctx]))
+            sym (when (seq? form-to-check) (first form-to-check))
+            resolved-sym (var-name env sym)
+            has-term? (contains? breakpoints resolved-sym)
+            result (cond
+                     has-term? true
 
-      (and recur-target (= 'recur sym)) true
+                     (and recur-target (= 'recur sym)) true
 
-      ;; If we just expanded this form and it's different, recurse to check the expansion
-      (and (not= form form-to-check) (not has-term?))
-      (has-breakpoints? form-to-check ctx')
+                     ;; If we just expanded this form and it's different, recurse to check the expansion
+                     (and (not= form form-to-check) (not has-term?))
+                     (has-breakpoints? form-to-check ctx')
 
-      (= 'loop* sym) (some #(has-breakpoints? % (dissoc ctx' :recur-target)) (rest form-to-check))
+                     (= 'loop* sym) (some #(has-breakpoints? % (dissoc ctx' :recur-target)) (rest form-to-check))
 
-      (coll? form-to-check) (some #(has-breakpoints? % ctx') form-to-check)
+                     (coll? form-to-check) (some #(has-breakpoints? % ctx') form-to-check)
 
-      :else false)))
+                     :else false)]
+        ;; Cache the result for this form
+        (when cache-key
+          (swap! breakpoint-cache assoc cache-key (boolean result)))
+        result))))
 
 (defn can-inline?
   [form]
@@ -83,6 +91,7 @@
       (and (vector? form) (every? can-inline? form))))
 
 (declare invert)
+(declare invert-impl)
 
 (defn resolve-sequentially [ctx coll then]
   (let [[syncs [asn & others]] (split-with #(not (has-breakpoints? % ctx)) coll)]
@@ -96,7 +105,8 @@
                      ~(resolve-sequentially
                        (dissoc ctx :sync-recur?) others
                        #(then `[~@(map first syncs) ~async-binding ~@%])))]
-             ~(invert (assoc ctx :r cont) asn))))
+             ;; Use invert-impl (not invert) to preserve expansion/breakpoint caches
+             ~(invert-impl (assoc ctx :r cont) asn))))
       (then coll))))
 
 (defn add-env-syms [ctx syms]
@@ -142,9 +152,13 @@
                           (~binding-sym [~@(interleave var-syms saved-syms)]
                                         (~e err#)))]
          ;; Establish bindings for sync execution, CPS-transform just the body
+         ;; Use invert-impl (not invert) to preserve the expansion-cache and
+         ;; breakpoint-cache across binding form boundaries. Each DOM element
+         ;; macro creates binding forms (with-parent-addr, with-slot), and
+         ;; resetting the cache at each level caused exponential re-expansion.
          (~macro-sym ~bindings
-           ~(invert (assoc ctx :r wrapped-r :e wrapped-e)
-                    `(do ~@body))))
+           ~(invert-impl (assoc ctx :r wrapped-r :e wrapped-e)
+                         `(do ~@body))))
       ;; No breakpoints in body - just expand normally
       (recur ctx
              (apply (if (:js-globals env)
@@ -401,10 +415,20 @@
                             {:form form})))))
 
 (defn invert
-  "CPS inversion with macro expansion caching.
-   Creates an expansion cache atom that persists across has-breakpoints? calls
-   to avoid re-expanding the same macros multiple times."
+  "CPS inversion with caching.
+   Creates caches that persist across the entire inversion:
+   - expansion-cache: avoids re-expanding the same macros
+   - breakpoint-cache: avoids re-traversing the same sub-trees in has-breakpoints?
+   Also tags the env with ::in-cps-transform so macros can detect they are being
+   expanded inside a CPS transformation and skip unnecessary branches."
   [ctx form]
-  (let [expansion-cache (atom {})
-        ctx-with-cache (assoc ctx :expansion-cache expansion-cache)]
-    (invert-impl ctx-with-cache form)))
+  (let [expansion-cache (or (:expansion-cache ctx) (atom {}))
+        breakpoint-cache (or (:breakpoint-cache ctx) (atom {}))
+        ctx-with-cache (assoc ctx
+                              :expansion-cache expansion-cache
+                              :breakpoint-cache breakpoint-cache)
+        ;; Tag the env so macros can detect CPS context and optimize their expansion.
+        ;; For example, DOM element macros can skip fallback branches that are dead code
+        ;; inside a CPS-transformed body.
+        ctx-with-flag (update ctx-with-cache :env assoc ::in-cps-transform true)]
+    (invert-impl ctx-with-flag form)))
