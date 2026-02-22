@@ -19,11 +19,13 @@
       (if (:js-globals env)
         ;; In Clojurescript use cljs.analyzer
         (:name (resolve-var-cljs env sym))
-        ;; In Clojure, use the existing resolution logic
+        ;; In Clojure — use str instead of .getName for SCI namespace compatibility
         (when-let [v (resolve env sym)]
-          (let [nm (:name (meta v))
-                nsp (.getName ^clojure.lang.Namespace (:ns (meta v)))]
-            (symbol (name nsp) (name nm))))))))
+          (let [m (meta v)
+                nm (:name m)
+                nsp (:ns m)]
+            (when (and nm nsp)
+              (symbol (str nsp) (name nm)))))))))
 
 (defn expand-macro
   "Expand a macro form if it's actually a macro. Returns [expanded changed?]"
@@ -37,9 +39,9 @@
             (let [expanded (apply (resolve (:name macro-info))
                                   form env (rest form))]
               [expanded true])))
-        ;; Clojure
+        ;; Clojure — use meta check for SCI compatibility (SCI vars lack .isMacro field)
         (when-let [resolved (resolve env sym)]
-          (when (.isMacro resolved)
+          (when (:macro (meta resolved))
             (let [expanded (apply resolved form env (rest form))]
               [expanded true])))))))
 
@@ -200,9 +202,9 @@
       (if (and head (:js-globals env))
         ;; use cljs.analyzer to find macro var info
         (:macro (resolve-macro-var-cljs env head))
-        ;; use normal Clojure resolve
+        ;; use normal Clojure resolve — meta check for SCI compatibility
         (let [resolved (when (symbol? head) (resolve env head))]
-          (and resolved (.isMacro resolved))))
+          (and resolved (:macro (meta resolved)))))
       (recur ctx
              (apply (if (:js-globals env)
                       (resolve (:name (resolve-macro-var-cljs env head)))
