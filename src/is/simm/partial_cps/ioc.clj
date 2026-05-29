@@ -159,8 +159,8 @@
          ;; macro creates binding forms (with-parent-addr, with-slot), and
          ;; resetting the cache at each level caused exponential re-expansion.
          (~macro-sym ~bindings
-           ~(invert-impl (assoc ctx :r wrapped-r :e wrapped-e)
-                         `(do ~@body))))
+                     ~(invert-impl (assoc ctx :r wrapped-r :e wrapped-e)
+                                   `(do ~@body))))
       ;; No breakpoints in body - just expand normally
       (recur ctx
              (apply (if (:js-globals env)
