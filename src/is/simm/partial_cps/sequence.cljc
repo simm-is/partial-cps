@@ -101,6 +101,28 @@
          (fn [resolve _reject]
            (if (seq r)
              (resolve [(clojure.core/first r) (clojure.core/rest r)])
+             (resolve nil)))))
+
+     ;; Subvec: the PersistentVector anext returns `(subvec v 1)` as the rest,
+     ;; which is a Subvec — so consuming any multi-element vector source hits
+     ;; this type on the second step. `(subvec subvec 1)` stays a Subvec, so
+     ;; this is closed (no further unextended rest type).
+     (extend-type cljs.core/Subvec
+       PAsyncSeq
+       (anext [v]
+         (fn [resolve _reject]
+           (if (seq v)
+             (resolve [(clojure.core/first v) (subvec v 1)])
+             (resolve nil)))))
+
+     ;; IntegerRange: `(range n)` with integer bounds produces an IntegerRange
+     ;; (not Range); `(rest …)` yields a further IntegerRange.
+     (extend-type cljs.core/IntegerRange
+       PAsyncSeq
+       (anext [r]
+         (fn [resolve _reject]
+           (if (seq r)
+             (resolve [(clojure.core/first r) (clojure.core/rest r)])
              (resolve nil)))))))
 
 (defn first
@@ -147,69 +169,89 @@
   ([to async-seq]
    (transduce identity conj to async-seq)))
 
-(defprotocol PTransducerState
-  "Protocol for managing shared transducer state"
-  (-ensure-buffer! [this idx] "Ensure buffer has element at idx"))
+;; Empty FIFO queue for staging transducer outputs (PersistentQueue).
+(def ^:private empty-output-queue
+  #?(:clj clojure.lang.PersistentQueue/EMPTY
+     :cljs #queue []))
 
-(deftype TransducerState [xf source-ref buffer completed?]
-  PTransducerState
-  (-ensure-buffer! [_ idx]
-    (async
-      ;; First check if we already have the element
-     (if (> (count @buffer) idx)
-       true
-        ;; Need more elements or completion already called
-       (if @completed?
-         false  ; No more elements available
-          ;; Try to pull more from source
-         (loop []
-           (if (> (count @buffer) idx)
-              ;; We have enough
-             true
-              ;; Need to pull from source
-             (if-let [source @source-ref]
-               (if-let [[v next-source] (await (anext source))]
-                  ;; Got value - feed through transducer
-                 (let [result (xf nil v)
-                       _ (vreset! source-ref next-source)]
-                   (if (reduced? result)
-                      ;; Reduced - complete and check buffer
-                     (do
-                       (vreset! completed? true)
-                        ;; Call completion
-                       (xf (unreduced result))
-                        ;; Check if we have element after completion
-                       (> (count @buffer) idx))
-                      ;; Check if we have more source
-                     (if next-source
-                        ;; Continue pulling
-                       (recur)
-                        ;; No more source - need to call completion
-                       (do
-                         (vreset! completed? true)
-                         (xf nil)
-                         (> (count @buffer) idx)))))
-                  ;; Source exhausted - call completion
-                 (do
-                   (vreset! completed? true)
-                   (vreset! source-ref nil)
-                    ;; Call completion - this may add more elements (e.g., partition-all)
-                   (xf nil)
-                    ;; Check if completion added the element we need
-                   (> (count @buffer) idx)))
-                ;; No source available
-               (do
-                 (vreset! completed? true)
-                 false)))))))))
+(defn- pull-one!
+  "Advance the shared transducer state by exactly enough source pulls to yield
+  one more transduced output, and return (async) that value — or ::done when
+  the stream is exhausted.
 
-(deftype TransducedAsyncSeq [state idx]
+  The transducer's step appends outputs to `pending` (a FIFO queue), so a
+  single source pull may yield zero (filter), one (map), or several (mapcat /
+  a completion flush) outputs; surplus outputs stay queued and are returned by
+  later calls without re-pulling the source. `pull-one!` is the ONLY place the
+  source is advanced — nodes call it in strict realization order, so the shared
+  state is consumed monotonically and never re-read."
+  [{:keys [xf source-ref pending completed?]}]
+  (async
+   (loop []
+     (cond
+       (seq @pending)
+       (let [v (peek @pending)]
+         (vswap! pending pop)
+         v)
+
+       @completed?
+       ::done
+
+       :else
+       (if-let [source @source-ref]
+         (if-let [[v next-source] (await (anext source))]
+           (let [result (xf nil v)]
+             ;; `next-source` may be nil here (this was the source's last
+             ;; element); we still recur to drain `pending`, and the
+             ;; nil-source-ref branch below runs completion afterwards.
+             (vreset! source-ref next-source)
+             (when (reduced? result)
+               ;; A reducing transducer (e.g. take) emitted its final value
+               ;; AND signalled stop on the same element: run completion (may
+               ;; flush, e.g. partition-all) and mark done. The emitted value
+               ;; is already queued in `pending`, so the loop picks it up.
+               (xf (unreduced result))
+               (vreset! completed? true))
+             (recur))
+           ;; anext returned nil: source exhausted. Run completion (may flush,
+           ;; e.g. partition-all) then mark done.
+           (do
+             (vreset! source-ref nil)
+             (xf nil)
+             (vreset! completed? true)
+             (recur)))
+         ;; source-ref is nil but not yet completed — exhausted via a
+         ;; nil `next-source` above; run the completion flush now.
+         (do
+           (xf nil)
+           (vreset! completed? true)
+           (recur)))))))
+
+;; A node in a lazy, transduced async sequence. `cell` memoizes this node's
+;; single step — `::unrealized`, or the realized `[value next-node]` / `nil`.
+;; Re-reading a node (e.g. `first` then `rest` on the same node) returns the
+;; memoized result without re-pulling the source, so `anext` is idempotent.
+;;
+;; Crucially, a node references only its successor, never its predecessor: once
+;; the consumer advances past a node and drops it, that node and its value
+;; become collectable. Holding a mid-stream node pins only the realized chain
+;; *forward* from it — earlier elements are released. (Holding the HEAD retains
+;; the whole realized chain, exactly like clojure.core lazy-seqs.) This is the
+;; fix for the prior shared-monotonic-buffer design, where every node shared
+;; one ever-growing buffer and thus pinned every element ever consumed.
+(deftype LazyTransducedSeq [state cell]
   PAsyncSeq
   (anext [_]
     (async
-      ;; Ensure buffer has element at idx
-     (when (await (-ensure-buffer! state idx))
-       [(nth @(.-buffer state) idx)
-        (TransducedAsyncSeq. state (inc idx))]))))
+     (let [c @cell]
+       (if (not= ::unrealized c)
+         c
+         (let [v (await (pull-one! state))
+               result (if (= ::done v)
+                        nil
+                        [v (LazyTransducedSeq. state (volatile! ::unrealized))])]
+           (vreset! cell result)
+           result))))))
 
 (defn sequence
   "Transform an AsyncSeq with a transducer, returning a new lazy AsyncSeq.
@@ -221,27 +263,26 @@
    (sequence (partition-all 3) async-seq)"
   [xform source-seq]
   (when source-seq
-    (let [;; Shared state
-          buffer (volatile! [])
+    (let [;; Shared, monotonically-consumed transducer state.
+          pending (volatile! empty-output-queue)
           source-ref (volatile! source-seq)
           completed? (volatile! false)
 
-          ;; Create the step function that collects into buffer
+          ;; Step appends outputs to the pending FIFO; pull-one! drains it.
           step (fn
-                 ([] nil)  ; Init (not used)
-                 ([result]   ; Completion - just return result
-                  result)
-                 ([result input]  ; Step - collect input and return result
-                  (vswap! buffer conj input)
+                 ([] nil)
+                 ([result] result)
+                 ([result input]
+                  (vswap! pending conj input)
                   result))
 
-          ;; Apply transducer to step function
           xf (xform step)
+          state {:xf xf
+                 :source-ref source-ref
+                 :pending pending
+                 :completed? completed?}]
 
-          ;; Create the shared state object
-          state (->TransducerState xf source-ref buffer completed?)]
-
-      (TransducedAsyncSeq. state 0))))
+      (->LazyTransducedSeq state (volatile! ::unrealized)))))
 
 ;; For-async comprehension
 
