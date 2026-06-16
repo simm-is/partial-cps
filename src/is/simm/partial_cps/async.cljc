@@ -35,14 +35,14 @@
   This is essential for loop/recur constructs in CPS-transformed code."
   [cont-fn & args]
   (let [result (apply cont-fn args)]
-    (if (instance? is.simm.partial_cps.runtime.Thunk result)
+    (if (runtime/thunk? result)
       (if *in-trampoline*
         result  ; Already in trampoline, return Thunk
         ;; Not in trampoline, execute it
         (binding [*in-trampoline* true]
           (loop [r result]
-            (if (instance? is.simm.partial_cps.runtime.Thunk r)
-              (recur ((.-f ^is.simm.partial_cps.runtime.Thunk r)))
+            (if (runtime/thunk? r)
+              (recur (runtime/force-thunk r))
               r))))
       result)))
 
@@ -70,9 +70,9 @@
                            (~r v#)
                            (binding [*in-trampoline* true]
                              (loop [result# (~r v#)]
-                               (if (instance? is.simm.partial_cps.runtime.Thunk result#)
+                               (if (runtime/thunk? result#)
                                   ;; If continuation returns a thunk, trampoline it
-                                 (recur ((.-f ^is.simm.partial_cps.runtime.Thunk result#)))
+                                 (recur (runtime/force-thunk result#))
                                  result#))))
                          (catch ~(if (:js-globals env) :default `Throwable) t# (~e t#))))]
          (~(first args) safe-r# ~e)))))
@@ -101,8 +101,8 @@
               ~(invert params form)
               (binding [*in-trampoline* true]
                 (loop [result# ~(invert params form)]
-                  (if (instance? is.simm.partial_cps.runtime.Thunk result#)
+                  (if (runtime/thunk? result#)
                     ;; If continuation returns a thunk, trampoline it
-                    (recur ((.-f ^is.simm.partial_cps.runtime.Thunk result#)))
+                    (recur (runtime/force-thunk result#))
                     result#))))
             (catch ~(if (:js-globals &env) :default `Throwable) t# (~e t#)))))))

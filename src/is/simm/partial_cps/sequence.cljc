@@ -509,8 +509,8 @@
                                     ~(ioc/invert params body-form)
                                     (binding [async/*in-trampoline* true]
                                       (loop [result# ~(ioc/invert params body-form)]
-                                        (if (instance? is.simm.partial_cps.runtime.Thunk result#)
-                                          (recur ((.-f ^is.simm.partial_cps.runtime.Thunk result#)))
+                                        (if (is.simm.partial-cps.runtime/thunk? result#)
+                                          (recur (is.simm.partial-cps.runtime/force-thunk result#))
                                           result#))))
                    ;; Wrap with user bindings if any
                    wrapped-execution (if (seq restore-bindings)
