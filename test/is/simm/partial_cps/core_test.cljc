@@ -404,6 +404,19 @@
           value)))
      "test")))
 
+(deftest test-keyword-fn-over-await
+  ;; REGRESSION: a keyword used as a fn applied DIRECTLY to an await result —
+  ;; `(:k (await …))`. invert's macro-check called resolve-macro-var-cljs on the
+  ;; form head without a `symbol?` guard, so a keyword head threw ClassCastException
+  ;; (Keyword→Symbol) on cljs. Must compile + run.
+  (testing "(:key (await …)) and ((set …) (await …)) heads don't crash invert"
+    (test-async
+     (async
+      (let [m (:k (await (async {:k 41})))
+            n (await (async 1))]
+        (+ m n)))
+     42)))
+
 (deftest test-many-sequential-awaits
   ;; REGRESSION GUARD for the cljs compile blowup: a long run of sequential awaits
   ;; in ONE async block. The CPS continuations MUST be emitted as `let`-bound

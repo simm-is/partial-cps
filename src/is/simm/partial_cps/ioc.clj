@@ -207,8 +207,11 @@
       (handle-binding-form ctx form)
 
       ;; Check if this is a macro and expand it
-      (if (and head (:js-globals env))
-        ;; use cljs.analyzer to find macro var info
+      (if (and head (symbol? head) (:js-globals env))
+        ;; use cljs.analyzer to find macro var info — guard symbol? first:
+        ;; `resolve-macro-var-cljs` casts head to Symbol, so a keyword-fn head
+        ;; like `(:k (await x))` would otherwise throw ClassCastException on cljs
+        ;; (the CLJ branch below already guards `symbol?`).
         (:macro (resolve-macro-var-cljs env head))
         ;; use normal Clojure resolve — meta check for SCI compatibility
         (let [resolved (when (symbol? head) (resolve env head))]
