@@ -403,3 +403,25 @@
              :cljs (.toLowerCase value))
           value)))
      "test")))
+
+(deftest test-many-sequential-awaits
+  ;; REGRESSION GUARD for the cljs compile blowup: a long run of sequential awaits
+  ;; in ONE async block. The CPS continuations MUST be emitted as `let`-bound
+  ;; ANONYMOUS fns (not nested NAMED `letfn`) — cljs's analyzer runs a second
+  ;; analysis pass over named fns (fn* pass2), which compounds multiplicatively
+  ;; across the per-await nesting → O(2^N) cljs COMPILE time (24 awaits used to
+  ;; time the build out entirely). If this file ever compiles slowly on cljs again,
+  ;; a nested-`letfn` continuation has crept back in. Also asserts correctness.
+  (testing "20 sequential awaits compile + run correctly (sum 0..19 = 190)"
+    (test-async
+     (async
+      (let [b0  (await (async 0))  b1  (await (async 1))  b2  (await (async 2))
+            b3  (await (async 3))  b4  (await (async 4))  b5  (await (async 5))
+            b6  (await (async 6))  b7  (await (async 7))  b8  (await (async 8))
+            b9  (await (async 9))  b10 (await (async 10)) b11 (await (async 11))
+            b12 (await (async 12)) b13 (await (async 13)) b14 (await (async 14))
+            b15 (await (async 15)) b16 (await (async 16)) b17 (await (async 17))
+            b18 (await (async 18)) b19 (await (async 19))]
+        (+ b0 b1 b2 b3 b4 b5 b6 b7 b8 b9
+           b10 b11 b12 b13 b14 b15 b16 b17 b18 b19)))
+     190)))

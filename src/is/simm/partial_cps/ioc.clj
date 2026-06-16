@@ -102,13 +102,21 @@
             sync-bindings (->> syncs (filter second) (mapcat identity))
             async-binding (with-meta (gensym) (meta asn))
             cont (gensym "cont")]
-        `(let [~@sync-bindings]
-           (letfn [(~cont [~async-binding]
-                     ~(resolve-sequentially
-                       (dissoc ctx :sync-recur?) others
-                       #(then `[~@(map first syncs) ~async-binding ~@%])))]
-             ;; Use invert-impl (not invert) to preserve expansion/breakpoint caches
-             ~(invert-impl (assoc ctx :r cont) asn))))
+        ;; The continuation is bound as a `let`-scoped ANONYMOUS fn (not `letfn`).
+        ;; It is single-reference and non-self-recursive, so it doesn't need
+        ;; letfn's mutual/self visibility — and crucially, cljs's analyzer runs a
+        ;; SECOND analysis pass over *named* fns (fn* pass2, "optimize self calls"),
+        ;; which compounds multiplicatively across the N-deep cont nesting one-per-
+        ;; await → O(2^N) cljs compile. An anonymous fn skips pass2, making the
+        ;; compile linear. (try/loop recur-target stay `letfn` — they genuinely
+        ;; need it, and don't nest per-await.)
+        `(let [~@sync-bindings
+               ~cont (fn [~async-binding]
+                       ~(resolve-sequentially
+                         (dissoc ctx :sync-recur?) others
+                         #(then `[~@(map first syncs) ~async-binding ~@%])))]
+           ;; Use invert-impl (not invert) to preserve expansion/breakpoint caches
+           ~(invert-impl (assoc ctx :r cont) asn)))
       (then coll))))
 
 (defn add-env-syms [ctx syms]
@@ -222,9 +230,10 @@
               cont (gensym "cont")]
           (if (has-breakpoints? con ctx)
             (let [ctx' (dissoc ctx :sync-recur?)]
-              `(letfn [(~cont [con#] (if con# ~(invert-impl ctx' left)
-                                         ~(invert-impl ctx' right)
-                                         ~@unexpected-others))]
+              ;; anonymous let-bound cont (skips cljs fn* pass2) — see resolve-sequentially
+              `(let [~cont (fn [con#] (if con# ~(invert-impl ctx' left)
+                                          ~(invert-impl ctx' right)
+                                          ~@unexpected-others))]
                  ~(invert-impl (assoc ctx :r cont) con)))
             `(if ~con ~(invert-impl ctx left) ~(invert-impl ctx right))))
 
@@ -257,14 +266,15 @@
               updated-ctx (add-env-syms ctx (map first syncs))
               generated-form (if asn
                                ;; We have an async binding
+                               ;; anonymous let-bound cont (skips cljs fn* pass2) — see resolve-sequentially
                                `(let* [~@(mapcat identity syncs)]
-                                      (letfn [(~cont [async-value#]
-                                                (let* [~sym async-value#]
-                                                      ~(invert-impl (add-env-syms (dissoc updated-ctx :sync-recur?) [sym])
-                                                                    (if (seq others)
-                                                                      `(let* [~@(mapcat identity others)]
-                                                                             ~@(rest tail))
-                                                                      `(do ~@(rest tail))))))]
+                                      (let [~cont (fn [async-value#]
+                                                    (let* [~sym async-value#]
+                                                          ~(invert-impl (add-env-syms (dissoc updated-ctx :sync-recur?) [sym])
+                                                                        (if (seq others)
+                                                                          `(let* [~@(mapcat identity others)]
+                                                                                 ~@(rest tail))
+                                                                          `(do ~@(rest tail))))))]
                                         ~(invert-impl (assoc updated-ctx :r cont) asn)))
                                ;; No async bindings
                                `(let* [~@(mapcat identity syncs)]
@@ -282,8 +292,9 @@
           (if asn
             `(do ~@syncs
                  ~(if others
-                    `(letfn [(~cont [_#] ~(invert-impl (dissoc ctx :sync-recur?)
-                                                       `(do ~@others)))]
+                    ;; anonymous let-bound cont (skips cljs fn* pass2) — see resolve-sequentially
+                    `(let [~cont (fn [_#] ~(invert-impl (dissoc ctx :sync-recur?)
+                                                        `(do ~@others)))]
                        ~(invert-impl (assoc ctx :r cont) asn))
                     (invert-impl ctx asn)))
             `(~r ~form)))
