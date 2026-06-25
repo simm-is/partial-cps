@@ -78,7 +78,15 @@
          (~(first args) safe-r# ~e)))))
 
 (def ^:no-doc breakpoints
-  {`await `await-handler})
+  {`await `await-handler
+   ;; ClojureScript >= 1.12 added a core `await` MACRO (native JS async/await interop).
+   ;; It is auto-referred into every ns and, being a macro, wins over a `:refer`'d
+   ;; partial-cps `await` in call position. We register it as the SAME CPS breakpoint so
+   ;; that inside a partial-cps `async`, a bare `(await x)` is CPS-transformed whether it
+   ;; resolves to partial-cps's `await` or `cljs.core/await` — no per-ns
+   ;; `(:refer-clojure :exclude [await])` needed. (On the JVM `cljs.core/await` never
+   ;; resolves, so this key is simply inert there.)
+   'cljs.core/await `await-handler})
 
 #?(:clj
    (defmacro async

@@ -17,8 +17,11 @@
     ;; Don't qualify special forms or core symbols that shouldn't be qualified
     (when-not (special-symbol? sym)
       (if (:js-globals env)
-        ;; In Clojurescript use cljs.analyzer
-        (:name (resolve-var-cljs env sym))
+        ;; In ClojureScript use cljs.analyzer — resolve as a var, FALLING BACK to a
+        ;; macro var so a macro-named breakpoint (e.g. `cljs.core/await` on cljs >= 1.12)
+        ;; resolves to its fully-qualified name and can be matched in `breakpoints`.
+        (or (:name (resolve-var-cljs env sym))
+            (:name (resolve-macro-var-cljs env sym)))
         ;; In Clojure — use str instead of .getName for SCI namespace compatibility
         (when-let [v (resolve env sym)]
           (let [m (meta v)
@@ -52,7 +55,13 @@
   (let [cache-key (when breakpoint-cache [form (some? recur-target)])]
     (if-let [cached-result (when cache-key (get @breakpoint-cache cache-key))]
       cached-result
-      (let [[form-to-check ctx'] (if-let [cached (when expansion-cache (get @expansion-cache form))]
+      ;; A registered breakpoint is TERMINAL: match it on the ORIGINAL operator WITHOUT
+      ;; macroexpanding, so a breakpoint that is ALSO a macro (e.g. `cljs.core/await` on
+      ;; cljs >= 1.12) is never expanded (its expansion would fire the macro's own assert).
+      (if (and (seq? form) (symbol? (first form))
+               (contains? breakpoints (var-name env (first form))))
+        (do (when cache-key (swap! breakpoint-cache assoc cache-key true)) true)
+        (let [[form-to-check ctx'] (if-let [cached (when expansion-cache (get @expansion-cache form))]
                                    [cached ctx]
                                     ;; Not in cache, try to expand
                                    (if-let [[expanded _] (expand-macro form env)]
@@ -83,7 +92,7 @@
         ;; Cache the result for this form
         (when cache-key
           (swap! breakpoint-cache assoc cache-key (boolean result)))
-        result))))
+        result)))))
 
 (defn can-inline?
   [form]
@@ -206,16 +215,19 @@
                           (nil? head-ns))))))
       (handle-binding-form ctx form)
 
-      ;; Check if this is a macro and expand it
-      (if (and head (symbol? head) (:js-globals env))
-        ;; use cljs.analyzer to find macro var info — guard symbol? first:
-        ;; `resolve-macro-var-cljs` casts head to Symbol, so a keyword-fn head
-        ;; like `(:k (await x))` would otherwise throw ClassCastException on cljs
-        ;; (the CLJ branch below already guards `symbol?`).
-        (:macro (resolve-macro-var-cljs env head))
-        ;; use normal Clojure resolve — meta check for SCI compatibility
-        (let [resolved (when (symbol? head) (resolve env head))]
-          (and resolved (:macro (meta resolved)))))
+      ;; Check if this is a macro and expand it — UNLESS it is a registered breakpoint.
+      ;; A breakpoint that is ALSO a macro (e.g. `cljs.core/await` on cljs >= 1.12) must be
+      ;; dispatched to its handler (the breakpoint clause below), NOT macroexpanded.
+      (and (not (and (symbol? head) (contains? breakpoints (var-name env head))))
+           (if (and head (symbol? head) (:js-globals env))
+             ;; use cljs.analyzer to find macro var info — guard symbol? first:
+             ;; `resolve-macro-var-cljs` casts head to Symbol, so a keyword-fn head
+             ;; like `(:k (await x))` would otherwise throw ClassCastException on cljs
+             ;; (the CLJ branch below already guards `symbol?`).
+             (:macro (resolve-macro-var-cljs env head))
+             ;; use normal Clojure resolve — meta check for SCI compatibility
+             (let [resolved (when (symbol? head) (resolve env head))]
+               (and resolved (:macro (meta resolved))))))
       (recur ctx
              (apply (if (:js-globals env)
                       (resolve (:name (resolve-macro-var-cljs env head)))
