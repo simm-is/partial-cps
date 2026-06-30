@@ -22,7 +22,7 @@
                   :lib lib
                   :version v
                   :basis @basis
-                  :src-dirs ["src"]
+                  :src-dirs ["src" "src-core-async"]
                   :scm {:url "https://github.com/simm-is/partial-cps"
                         :connection "scm:git:git://github.com/simm-is/partial-cps.git"
                         :developerConnection "scm:git:ssh://git@github.com/simm-is/partial-cps.git"
@@ -33,7 +33,7 @@
                               [:license
                                [:name "Eclipse Public License"]
                                [:url "http://www.eclipse.org/legal/epl-v10.html"]]]]})
-    (b/copy-dir {:src-dirs ["src" "resources"]
+    (b/copy-dir {:src-dirs ["src" "src-core-async" "resources"]
                  :target-dir class-dir})
     (b/jar {:class-dir class-dir
             :jar-file jf})

@@ -62,37 +62,37 @@
                (contains? breakpoints (var-name env (first form))))
         (do (when cache-key (swap! breakpoint-cache assoc cache-key true)) true)
         (let [[form-to-check ctx'] (if-let [cached (when expansion-cache (get @expansion-cache form))]
-                                   [cached ctx]
+                                     [cached ctx]
                                     ;; Not in cache, try to expand
-                                   (if-let [[expanded _] (expand-macro form env)]
-                                     (do
-                                       (when expansion-cache
-                                         (swap! expansion-cache assoc form expanded))
+                                     (if-let [[expanded _] (expand-macro form env)]
+                                       (do
+                                         (when expansion-cache
+                                           (swap! expansion-cache assoc form expanded))
                                         ;; Recursively check the expansion
-                                       [expanded ctx])
+                                         [expanded ctx])
                                       ;; Not a macro, use form as-is
-                                     [form ctx]))
-            sym (when (seq? form-to-check) (first form-to-check))
-            resolved-sym (var-name env sym)
-            has-term? (contains? breakpoints resolved-sym)
-            result (cond
-                     has-term? true
+                                       [form ctx]))
+              sym (when (seq? form-to-check) (first form-to-check))
+              resolved-sym (var-name env sym)
+              has-term? (contains? breakpoints resolved-sym)
+              result (cond
+                       has-term? true
 
-                     (and recur-target (= 'recur sym)) true
+                       (and recur-target (= 'recur sym)) true
 
                      ;; If we just expanded this form and it's different, recurse to check the expansion
-                     (and (not= form form-to-check) (not has-term?))
-                     (has-breakpoints? form-to-check ctx')
+                       (and (not= form form-to-check) (not has-term?))
+                       (has-breakpoints? form-to-check ctx')
 
-                     (= 'loop* sym) (some #(has-breakpoints? % (dissoc ctx' :recur-target)) (rest form-to-check))
+                       (= 'loop* sym) (some #(has-breakpoints? % (dissoc ctx' :recur-target)) (rest form-to-check))
 
-                     (coll? form-to-check) (some #(has-breakpoints? % ctx') form-to-check)
+                       (coll? form-to-check) (some #(has-breakpoints? % ctx') form-to-check)
 
-                     :else false)]
+                       :else false)]
         ;; Cache the result for this form
-        (when cache-key
-          (swap! breakpoint-cache assoc cache-key (boolean result)))
-        result)))))
+          (when cache-key
+            (swap! breakpoint-cache assoc cache-key (boolean result)))
+          result)))))
 
 (defn can-inline?
   [form]

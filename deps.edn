@@ -1,22 +1,32 @@
-{:paths ["src" "resources"]
+;; `src-core-async` carries the OPTIONAL core.async↔partial-cps adapter
+;; (is.simm.partial-cps.core-async). It is on :paths (so it ships in the jar and
+;; :local/root consumers see it) but core.async is NOT a base :dep — the ns only
+;; loads for code that already pulls core.async (provided dep). Test/bench it via
+;; the :core-async alias, which adds core.async.
+{:paths ["src" "src-core-async" "resources"]
  :deps {org.clojure/clojure {:mvn/version "1.12.0"}}
  :aliases
  {:build {:deps {io.github.clojure/tools.build {:mvn/version "0.10.5"}
                  slipset/deps-deploy {:mvn/version "0.2.2"}}
           :ns-default build}
 
+  ;; core.async present → lets partial-cps compile/test the optional adapter ns.
+  :core-async {:extra-deps {org.clojure/core.async {:mvn/version "1.6.681"}}}
+
   :test {:extra-paths ["test"]
          :extra-deps {org.clojure/test.check {:mvn/version "1.1.1"}
+                      ;; the adapter's own tests need core.async (optional dep)
+                      org.clojure/core.async {:mvn/version "1.6.681"}
                       io.github.cognitect-labs/test-runner
                       {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
          :main-opts ["-m" "cognitect.test-runner"]
          :exec-fn cognitect.test-runner.api/test}
 
   :format {:extra-deps {cljfmt/cljfmt {:mvn/version "0.9.2"}}
-           :main-opts ["-m" "cljfmt.main" "check" "src" "test"]}
+           :main-opts ["-m" "cljfmt.main" "check" "src" "src-core-async" "test"]}
 
   :ffix {:extra-deps {cljfmt/cljfmt {:mvn/version "0.9.2"}}
-         :main-opts ["-m" "cljfmt.main" "fix" "src" "test"]}
+         :main-opts ["-m" "cljfmt.main" "fix" "src" "src-core-async" "test"]}
 
   :bench {:extra-paths ["test"]
           :extra-deps {criterium/criterium {:mvn/version "0.4.6"}}}}}
