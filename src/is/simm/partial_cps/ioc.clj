@@ -94,6 +94,95 @@
             (swap! breakpoint-cache assoc cache-key (boolean result)))
           result)))))
 
+(def ^:private pcps-async-sym 'is.simm.partial-cps.async/async)
+(def ^:private pcps-dual-sym 'is.simm.partial-cps.async/async+sync)
+
+(defn- macro-name
+  "Resolve sym to the fully-qualified name of the MACRO it refers to, or nil.
+   Needed because cljs.analyzer/resolve-var GUESSES a current-ns name for
+   unresolvable runtime symbols (macros have no runtime var), so var-name's
+   var-first `or` never reaches its macro fallback for macro-only names."
+  [env sym]
+  (when (and (symbol? sym) (not (special-symbol? sym)))
+    (if (:js-globals env)
+      (:name (resolve-macro-var-cljs env sym))
+      (when-let [v (resolve env sym)]
+        (when (:macro (meta v))
+          (let [m (meta v)]
+            (symbol (str (:ns m)) (name (:name m)))))))))
+
+(defn- guard-shadowing!
+  "Reject local bindings NAMED await/async inside a dual body: the sync-arm
+   strip resolves globally (it cannot see locals), so a shadowed await would
+   be stripped when the user meant the local — fail the build instead."
+  [syms form]
+  (doseq [s syms]
+    (when (and (symbol? s) (#{"await" "async"} (name s)))
+      (throw (ex-info (str "async+sync: locally binding `" s "` inside a dual "
+                           "body is unsupported (the sync-arm strip resolves "
+                           "globally and would rewrite it) — rename the local")
+                      {:binding s :form form})))))
+
+(defn strip-breakpoints
+  "Rewrite `form` to its SYNCHRONOUS shape:
+   - every resolved breakpoint call `(await x)` becomes `x`,
+   - a nested resolved `(async & body)` becomes `(do & body)`,
+   - a nested resolved `(async+sync s & body)` becomes `(do & body)`
+     (same-mode semantics: a synchronous context strips all the way down).
+   Resolution uses the SAME `var-name` lookup (after the same macroexpansion
+   discipline) as the async transform — a breakpoint is matched on the
+   ORIGINAL operator before expansion — so whatever the async arm would
+   treat as a suspension point, the sync arm un-suspends. An aliased or
+   fully-qualified await can therefore never survive into the sync arm
+   (where it would throw at runtime). Quoted forms are left untouched;
+   locals shadowing await/async are rejected at compile time."
+  [form {:keys [breakpoints env] :as ctx}]
+  (letfn [(walk [f]
+            (cond
+              (seq? f)
+              (let [head (first f)]
+                (cond
+                  (= 'quote head) f
+
+                  (and (symbol? head)
+                       (contains? breakpoints (var-name env head)))
+                  (do (assert (= 2 (count f))
+                              (str "breakpoint call must have exactly one argument: " f))
+                      (walk (second f)))
+
+                  (and (symbol? head)
+                       (= pcps-async-sym (macro-name env head)))
+                  (with-meta (cons 'do (map walk (rest f))) (meta f))
+
+                  (and (symbol? head)
+                       (= pcps-dual-sym (macro-name env head)))
+                  (with-meta (cons 'do (map walk (drop 2 f))) (meta f))
+
+                  :else
+                  (if-let [[expanded _] (expand-macro f env)]
+                    (walk expanded)
+                    (do
+                      (case head
+                        (let* loop*)
+                        (guard-shadowing! (take-nth 2 (second f)) f)
+                        letfn*
+                        (guard-shadowing! (take-nth 2 (second f)) f)
+                        fn*
+                        (guard-shadowing!
+                         (mapcat (fn [x] (cond (vector? x) x
+                                               (seq? x) (first x)
+                                               :else nil))
+                                 (rest f))
+                         f)
+                        nil)
+                      (with-meta (apply list (map walk f)) (meta f))))))
+
+              (vector? f) (with-meta (mapv walk f) (meta f))
+              (map? f) (into (empty f) (map (fn [[k v]] [(walk k) (walk v)])) f)
+              (set? f) (into (empty f) (map walk) f)
+              :else f))]
+    (walk form)))
+
 (defn can-inline?
   [form]
   (or (not (coll? form)) ; inline non-collection literals and symbols

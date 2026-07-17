@@ -1,7 +1,7 @@
 (ns is.simm.partial-cps.async
   (:refer-clojure :exclude [await])
   (:require [is.simm.partial-cps.runtime :as runtime]
-            #?(:clj [is.simm.partial-cps.ioc :refer [has-breakpoints? invert]]))
+            #?(:clj [is.simm.partial-cps.ioc :as ioc :refer [has-breakpoints? invert]]))
   #?(:cljs (:require-macros [is.simm.partial-cps.async :refer [async]])))
 
 (defn await
@@ -88,6 +88,18 @@
    ;; resolves, so this key is simply inert there.)
    'cljs.core/await `await-handler})
 
+(defn async-expr?
+  "Is x an asynchronous expression produced by the `async` macro (or `all`)?
+   Async expressions ARE plain 2-arity fns (fn? returns true — duck-typed
+   consumers keep working); this predicate is the reliable discriminator for
+   contracts where a fn-as-VALUE must be distinguished from an async return
+   (e.g. a query engine awaiting user functions that may themselves be
+   async). cljs: a property stamped on the emitted fn at creation.
+   clj: metadata (async exprs are rarely hot on the JVM)."
+  [x]
+  #?(:clj  (boolean (and (fn? x) (:is.simm.partial-cps/async (meta x))))
+     :cljs (boolean (and (fn? x) (true? (.-partial_cps_async_expr x))))))
+
 #?(:clj
    (defmacro async
      "Defines a function that takes a successful and exceptional continuation,
@@ -98,19 +110,96 @@
    A call of the form (breakpoint args..) is forwarded to the corresponding handler
    (handler succ exc args..), which is expected to eventually call either succ
    with the value or exc with exception to substitute the original call result
-   and resuming the execution."
+   and resuming the execution.
+
+   The returned fn is marked so `async-expr?` can identify it."
      [& body]
      (let [r (gensym) e (gensym)
            params {:r r :e e :env &env :breakpoints breakpoints}
-           form (cons 'do body)]
-       `(fn [~r ~e]
-          (try
-            (if *in-trampoline*
-              ~(invert params form)
-              (binding [*in-trampoline* true]
-                (loop [result# ~(invert params form)]
-                  (if (runtime/thunk? result#)
-                    ;; If continuation returns a thunk, trampoline it
-                    (recur (runtime/force-thunk result#))
-                    result#))))
-            (catch ~(if (:js-globals &env) :default `Throwable) t# (~e t#)))))))
+           form (cons 'do body)
+           fn-form `(fn [~r ~e]
+                      (try
+                        (if *in-trampoline*
+                          ~(invert params form)
+                          (binding [*in-trampoline* true]
+                            (loop [result# ~(invert params form)]
+                              (if (runtime/thunk? result#)
+                                ;; If continuation returns a thunk, trampoline it
+                                (recur (runtime/force-thunk result#))
+                                result#))))
+                        (catch ~(if (:js-globals &env) :default `Throwable) t# (~e t#))))]
+       (if (:js-globals &env)
+         `(let [f# ~fn-form]
+            (set! (.-partial_cps_async_expr f#) true)
+            f#)
+         `(with-meta ~fn-form {:is.simm.partial-cps/async true})))))
+
+#?(:clj
+   (defmacro async+sync
+     "One body, two execution modes — the dual-mode foundation.
+
+   On :clj this emits ONLY the synchronous form (breakpoints stripped:
+   `(await x)` → x, nested `(async …)`/`(async+sync …)` → do): zero
+   overhead, no dead async arm in the bytecode, and `sync?` is not even
+   evaluated (it must be a pure expression).
+
+   On :cljs it emits `(if sync? <stripped-sync-form> (async body…))` —
+   a runtime dispatch amortized at whatever frequency the enclosing
+   function is called.
+
+   The strip resolves symbols with the SAME resolution the async transform
+   uses (an aliased or fully-qualified await strips; a breakpoint that is
+   also a macro, e.g. cljs.core/await, is matched before expansion), so no
+   suspension point can survive into the sync arm and throw at runtime.
+   Locals named await/async inside the body are rejected at compile time."
+     [sync? & body]
+     (let [form (cons 'do body)
+           ctx {:breakpoints breakpoints :env &env}]
+       (if (:js-globals &env)
+         `(if ~sync?
+            ~(ioc/strip-breakpoints form ctx)
+            (async ~@body))
+         (ioc/strip-breakpoints form ctx)))))
+
+(defn all
+  "Async expression resolving to a vector of the results of `exprs` — each
+   an async expression — invoked IN ORDER, each driven to its first true
+   suspension (or completion) before the next launches. All-warm inputs
+   therefore complete synchronously and the whole `all` resolves before it
+   returns, preserving the trampoline's sync-completion property. Rejects
+   with the FIRST error; other branches keep running to completion (no
+   cancellation — partial-cps has no cancellation primitive). Each expr is
+   invoked exactly once. Empty input resolves to []."
+  [exprs]
+  (let [exprs (vec exprs)
+        n (count exprs)
+        f (fn [resolve reject]
+            (if (zero? n)
+              (invoke-continuation resolve [])
+              (let [results #?(:clj (object-array n) :cljs (make-array n))
+                    remaining (atom n)
+                    rejected? (atom false)]
+                (loop [i 0]
+                  (when (< i n)
+                    (let [t ((nth exprs i)
+                             (fn [v]
+                               (aset results i v)
+                               (when (and (zero? (swap! remaining dec))
+                                          (not @rejected?))
+                                 (invoke-continuation resolve (vec results))))
+                             (fn [err]
+                               (when (compare-and-set! rejected? false true)
+                                 (invoke-continuation reject err))))]
+                      ;; Drive this branch's Thunk chain NOW: when invoked
+                      ;; under an enclosing trampoline the branch RETURNS a
+                      ;; Thunk instead of forcing it (only one Thunk can
+                      ;; propagate to the enclosing loop), so `all` must run
+                      ;; each branch to its first real suspension itself.
+                      (loop [r t]
+                        (when (runtime/thunk? r)
+                          (recur (runtime/force-thunk r)))))
+                    (recur (inc i))))
+                nil)))]
+    #?(:cljs (set! (.-partial_cps_async_expr f) true))
+    #?(:clj (with-meta f {:is.simm.partial-cps/async true})
+       :cljs f)))
