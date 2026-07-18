@@ -2,7 +2,7 @@
   (:refer-clojure :exclude [await])
   (:require [is.simm.partial-cps.runtime :as runtime]
             #?(:clj [is.simm.partial-cps.ioc :as ioc :refer [has-breakpoints? invert]]))
-  #?(:cljs (:require-macros [is.simm.partial-cps.async :refer [async]])))
+  #?(:cljs (:require-macros [is.simm.partial-cps.async :refer [async async+sync]])))
 
 (defn await
   "Awaits the asynchronous execution of continuation-passing style function
