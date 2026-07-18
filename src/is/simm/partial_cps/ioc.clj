@@ -170,7 +170,10 @@
                         fn*
                         (guard-shadowing!
                          (mapcat (fn [x] (cond (vector? x) x
-                                               (seq? x) (first x)
+                                               ;; arity form ([params] body…):
+                                               ;; only the PARAMS vector holds
+                                               ;; bindings — body forms do not
+                                               (and (seq? x) (vector? (first x))) (first x)
                                                :else nil))
                                  (rest f))
                          f)
