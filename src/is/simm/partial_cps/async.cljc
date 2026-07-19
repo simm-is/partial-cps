@@ -151,7 +151,11 @@
    uses (an aliased or fully-qualified await strips; a breakpoint that is
    also a macro, e.g. cljs.core/await, is matched before expansion), so no
    suspension point can survive into the sync arm and throw at runtime.
-   Locals named await/async inside the body are rejected at compile time."
+   The walk is env-threaded through binding forms, fn literals are opaque
+   in BOTH arms (a bare await inside one is a compile-time error — wrap the
+   fn body in its own (async …) if it should produce an async expression),
+   and locals named await/async inside the body are rejected at compile
+   time (the async arm cannot resolve the shadowing)."
      [sync? & body]
      (let [form (cons 'do body)
            ctx {:breakpoints breakpoints :env &env}]

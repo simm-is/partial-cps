@@ -30,10 +30,54 @@
     (is (= 43 (async+sync true (-> (await (async 42)) inc))))))
 
 (deftest shadowing-rejected
-  (testing "locally binding await inside a dual body fails at compile time"
+  (testing "shadowing that COLLIDES with an in-scope breakpoint fails at
+            compile time (the async arm would still treat the call as a
+            suspension point)"
     (is (thrown? Exception
                  (eval '(is.simm.partial-cps.async/async+sync true
-                                                              (let [await inc] (await 1))))))))
+                                                              (let [await inc]
+                                                                (is.simm.partial-cps.async/await 1)))))))
+  (testing "shadowing that does NOT collide (await resolves elsewhere, e.g.
+            clojure.core/await) is site-free: emitted verbatim and correct"
+    (is (= 2 (eval '(is.simm.partial-cps.async/async+sync true
+                                                          (let [await inc] (await 1))))))))
+
+(deftest closures-are-opaque
+  (testing "a bare breakpoint inside a fn literal is a compile-time error in
+            the dual macro (it could never suspend — closures are opaque)"
+    (is (thrown? Exception
+                 (eval '(is.simm.partial-cps.async/async+sync true
+                                                              ((fn [x] (is.simm.partial-cps.async/await x)) 1))))))
+  (testing "…and in the plain async macro too"
+    (is (thrown? Exception
+                 (eval '(is.simm.partial-cps.async/async
+                         ((fn [x] (is.simm.partial-cps.async/await x)) 1))))))
+  (testing "a fn CONSTRUCTING an async expression is a value and legal"
+    (let [make (async+sync true (fn [x] (async (inc (await (async x))))))
+          r (atom nil)]
+      ((make 41) #(reset! r %) #(reset! r [:err %]))
+      (is (= 42 @r))))
+  (testing "a fn self-named await does not false-positive the scan"
+    (is (fn? (async+sync true (fn await [x] x))))))
+
+(deftest special-form-edges
+  (testing "(. obj (method args)) member position is not call position"
+    (is (= "bc" (async+sync true (. "abc" (substring (await (async 1))))))))
+  (testing "case with seq-shaped test constants compiles and strips"
+    (is (= :a (async+sync true (case (await (async 1)) (1 2) :a :b)))))
+  (testing "a catch binding shadowing await is fine while unused (site-free,
+            verbatim) …"
+    (is (= 1 (eval '(is.simm.partial-cps.async/async+sync true
+                                                          (try (is.simm.partial-cps.async/await
+                                                                (is.simm.partial-cps.async/async 1))
+                                                               (catch Exception await 2)))))))
+  (testing "…but rejected when the shadowed name is called as a breakpoint"
+    (is (thrown? Exception
+                 (eval '(is.simm.partial-cps.async/async+sync true
+                                                              (try (is.simm.partial-cps.async/async 1)
+                                                                   (catch Exception await
+                                                                          (is.simm.partial-cps.async/await
+                                                                           (is.simm.partial-cps.async/async 2))))))))))
 
 (deftest all-on-jvm
   (testing "empty input resolves []"
