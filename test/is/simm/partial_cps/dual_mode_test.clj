@@ -65,6 +65,19 @@
     (is (= "bc" (async+sync true (. "abc" (substring (await (async 1))))))))
   (testing "case with seq-shaped test constants compiles and strips"
     (is (= :a (async+sync true (case (await (async 1)) (1 2) :a :b)))))
+  (testing "KEYWORD-dispatch case keeps its imap type through the walk
+            (a plain {} rebuild misdispatches the compiled hash case*)"
+    (is (= [:add :retract :other]
+           (async+sync true
+                       (mapv (fn [op] (case op
+                                        :db/add :add
+                                        :db/retract :retract
+                                        :other))
+                             [:db/add :db/retract :db/x]))))
+    (is (= :add (async+sync true (case (await (async :db/add))
+                                   :db/add :add
+                                   :db/retract :retract
+                                   :other)))))
   (testing "a catch binding shadowing await is fine while unused (site-free,
             verbatim) …"
     (is (= 1 (eval '(is.simm.partial-cps.async/async+sync true

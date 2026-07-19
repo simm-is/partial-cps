@@ -297,8 +297,11 @@
                                  (mapv #(walk env %) vals-vec) (walk env default))
                   (meta f)))
               ;; clj: (case* ge shift mask default imap & args), imap {hash [const expr]}
+              ;; — rebuilt via (empty imap): the compiler depends on the imap's
+              ;; map TYPE/ordering for dispatch (a plain {} misdispatches)
               (let [[_ ge shift mask default imap & more] f
-                    imap' (reduce-kv (fn [m k [c e]] (assoc m k [c (walk env e)])) {} imap)]
+                    imap' (reduce-kv (fn [m k [c e]] (assoc m k [c (walk env e)]))
+                                     (empty imap) imap)]
                 (with-meta (list* 'case* ge shift mask (walk env default) imap' more)
                   (meta f)))))
           (walk [env f]
@@ -558,10 +561,11 @@
                 ;; Transform default expression
                 inverted-default (invert-impl ctx default-expr)]
             `(case* ~test-expr ~keys-vec ~inverted-vals ~inverted-default))
-          ;; CLJ format
+          ;; CLJ format — (empty imap) preserves the imap's map type/ordering,
+          ;; which the compiled case* dispatch depends on
           (let [[ge shift mask default imap & args] tail
                 imap (reduce-kv #(assoc %1 %2 (update %3 1 (fn [v] (invert-impl ctx v))))
-                                {} imap)]
+                                (empty imap) imap)]
             `(case* ~ge ~shift ~mask ~(invert-impl ctx default) ~imap ~@args)))
 
         let*

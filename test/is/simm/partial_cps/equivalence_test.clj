@@ -47,10 +47,17 @@
                    (let [~v ~(sub (conj locals acc))]
                      (recur (dec ~i) (+ ~acc ~i)))
                    [~acc ~(sub locals)])))
-      :case `(case ~(rint r 3)
-               0 ~(sub locals)
-               (1 2) ~(sub locals)
-               ~(sub locals))
+      :case (if (zero? (rint r 2))
+              ;; int dispatch and KEYWORD dispatch compile to different case*
+              ;; strategies (tableswitch vs hash) — cover both
+              `(case ~(rint r 3)
+                 0 ~(sub locals)
+                 (1 2) ~(sub locals)
+                 ~(sub locals))
+              `(case ~(pick r [:a :b :c :d])
+                 :a ~(sub locals)
+                 (:b :c) ~(sub locals)
+                 ~(sub locals)))
       :try `(try
               ~(if (zero? (rint r 3))
                  `(do (swap! ~'log conj :pre-throw)
