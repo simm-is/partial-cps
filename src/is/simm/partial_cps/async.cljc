@@ -138,14 +138,17 @@
    (defmacro async+sync
      "One body, two execution modes — the dual-mode foundation.
 
-   On :clj this emits ONLY the synchronous form (breakpoints stripped:
-   `(await x)` → x, nested `(async …)`/`(async+sync …)` → do): zero
-   overhead, no dead async arm in the bytecode, and `sync?` is not even
-   evaluated (it must be a pure expression).
-
-   On :cljs it emits `(if sync? <stripped-sync-form> (async body…))` —
+   Emits `(if sync? <direct-sync-form> (async body…))` on BOTH platforms —
    a runtime dispatch amortized at whatever frequency the enclosing
-   function is called.
+   function is called. `sync?` is honored everywhere: the CPS arm (with
+   its multi-shot, copyable continuations) is as available on the JVM as
+   on cljs.
+
+   When `sync?` is the LITERAL true or false the untaken arm is pruned at
+   compile time — zero overhead and no dead code. Consumers with a
+   platform-static mode (e.g. an engine that is always synchronous on the
+   JVM) should express that policy in a wrapper macro passing the literal,
+   not rely on the platform to imply it.
 
    The strip resolves symbols with the SAME resolution the async transform
    uses (an aliased or fully-qualified await strips; a breakpoint that is
@@ -159,11 +162,12 @@
      [sync? & body]
      (let [form (cons 'do body)
            ctx {:breakpoints breakpoints :env &env}]
-       (if (:js-globals &env)
-         `(if ~sync?
-            ~(ioc/strip-breakpoints form ctx)
-            (async ~@body))
-         (ioc/strip-breakpoints form ctx)))))
+       (cond
+         (true? sync?) (ioc/strip-breakpoints form ctx)
+         (false? sync?) `(async ~@body)
+         :else `(if ~sync?
+                  ~(ioc/strip-breakpoints form ctx)
+                  (async ~@body))))))
 
 (defn all
   "Async expression resolving to a vector of the results of `exprs` — each

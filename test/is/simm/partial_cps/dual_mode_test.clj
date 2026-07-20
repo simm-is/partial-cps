@@ -1,21 +1,48 @@
 (ns is.simm.partial-cps.dual-mode-test
-  "JVM side of the dual-mode foundation: async+sync emits ONLY the stripped
-   synchronous form on :clj (no dead async arm, sync? not evaluated), the
-   strip is hygienic (aliased/qualified await strips; shadowing rejected at
-   compile time; quotes untouched), and `all`/`async-expr?` behave."
+  "JVM side of the dual-mode foundation: async+sync honors sync? at runtime
+   on BOTH platforms (literal sync? prunes the untaken arm at compile time),
+   the CPS arm's continuations are multi-shot plain closures, the direct
+   emitter is hygienic (aliased/qualified await erases; colliding shadowing
+   rejected; closures opaque; quotes untouched), and `all`/`async-expr?`
+   behave."
   (:require [clojure.test :refer [deftest is testing]]
             [is.simm.partial-cps.async :as pa :refer [async async+sync all async-expr? await]]))
 
-(deftest clj-emits-sync-only
-  (testing "dual body returns the plain value on the JVM"
+(deftest dual-honors-sync-on-jvm
+  (testing "sync? true runs the direct arm and returns the plain value"
     (let [f (fn [x sync?] (async+sync sync? (+ 1 (await (async (* 2 x))))))]
-      ;; sync? is irrelevant on :clj — both calls run the stripped form
-      (is (= 7 (f 3 true)))
-      (is (= 7 (f 3 false)))))
-  (testing "sync? expression is NOT evaluated on :clj"
+      (is (= 7 (f 3 true)))))
+  (testing "sync? false returns the CPS arm — an async expression — on the
+            JVM too (the async arm is not a cljs-only capability)"
+    (let [f (fn [x sync?] (async+sync sync? (+ 1 (await (async (* 2 x))))))
+          e (f 3 false)
+          r (atom nil)]
+      (is (async-expr? e))
+      (e #(reset! r %) #(reset! r [:err %]))
+      (is (= 7 @r))))
+  (testing "a LITERAL sync? prunes the untaken arm at compile time (no
+            evaluation, no dead code)"
+    ;; literal true → direct arm only; the async machinery is absent
+    (is (= 5 (async+sync true (+ 2 3))))
+    ;; non-literal sync? IS evaluated now (runtime dispatch — sound)
     (let [evals (atom 0)]
       (is (= 5 (async+sync (do (swap! evals inc) true) (+ 2 3))))
-      (is (zero? @evals)))))
+      (is (= 1 @evals)))))
+
+(deftest continuations-are-multi-shot
+  (testing "a continuation is a plain closure: an awaited expression that
+            resolves TWICE runs the downstream body twice (amb/fork-replay/
+            inference-style re-execution) — on the JVM"
+    (let [runs (atom [])
+          double-resolve (fn [res _rej] (res 1) (res 10))
+          e (async+sync false
+                        (let [v (await double-resolve)]
+                          (swap! runs conj (+ v 100))
+                          v))
+          results (atom [])]
+      (e #(swap! results conj %) #(swap! results conj [:err %]))
+      (is (= [101 110] @runs) "downstream body ran once per resolution")
+      (is (= [1 10] @results) "outer continuation delivered both completions"))))
 
 (deftest strip-hygiene
   (testing "ALIASED await strips (the konserve/PSS bare-symbol strip missed this)"
@@ -89,8 +116,8 @@
                  (eval '(is.simm.partial-cps.async/async+sync true
                                                               (try (is.simm.partial-cps.async/async 1)
                                                                    (catch Exception await
-                                                                          (is.simm.partial-cps.async/await
-                                                                           (is.simm.partial-cps.async/async 2))))))))))
+                                                                     (is.simm.partial-cps.async/await
+                                                                      (is.simm.partial-cps.async/async 2))))))))))
 
 (deftest all-on-jvm
   (testing "empty input resolves []"
