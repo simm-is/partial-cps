@@ -2,6 +2,7 @@
   (:require [cljs.test :as test :refer-macros [deftest testing is]]
             [is.simm.partial-cps.async :refer [await]]
             [clojure.pprint :refer [pprint]]
+            [is.simm.partial-cps.dual-mode-test]
             [is.simm.partial-cps.sequence-test :as sequence]
             [is.simm.partial-cps.for-async-test :as for-async]
             [is.simm.partial-cps.core-test :as core-test])
@@ -157,6 +158,7 @@
 ;; Test runner
 (defn ^:export run-tests []
   (test/run-tests 'is.simm.partial-cps.async-test)
+  (test/run-tests 'is.simm.partial-cps.dual-mode-test)
   (test/run-tests 'is.simm.partial-cps.sequence-test)
   (test/run-tests 'is.simm.partial-cps.for-async-test)
   (test/run-tests 'is.simm.partial-cps.core-test))

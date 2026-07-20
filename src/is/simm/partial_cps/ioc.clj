@@ -58,8 +58,14 @@
       ;; A registered breakpoint is TERMINAL: match it on the ORIGINAL operator WITHOUT
       ;; macroexpanding, so a breakpoint that is ALSO a macro (e.g. `cljs.core/await` on
       ;; cljs >= 1.12) is never expanded (its expansion would fire the macro's own assert).
+      ;; :extra-site? extends what counts as a site (the direct emitter counts nested
+      ;; async/async+sync forms — same-mode semantics rewrite them too). Callers using
+      ;; :extra-site? must supply their OWN cache atoms — cache entries are
+      ;; site-predicate-dependent.
       (if (and (seq? form) (symbol? (first form))
-               (contains? breakpoints (var-name env (first form))))
+               (or (contains? breakpoints (var-name env (first form)))
+                   (when-let [extra (:extra-site? ctx)]
+                     (extra env (first form)))))
         (do (when cache-key (swap! breakpoint-cache assoc cache-key true)) true)
         (let [[form-to-check ctx'] (if-let [cached (when expansion-cache (get @expansion-cache form))]
                                      [cached ctx]
@@ -74,7 +80,9 @@
                                        [form ctx]))
               sym (when (seq? form-to-check) (first form-to-check))
               resolved-sym (var-name env sym)
-              has-term? (contains? breakpoints resolved-sym)
+              has-term? (or (contains? breakpoints resolved-sym)
+                            (boolean (when-let [extra (:extra-site? ctx)]
+                                       (and (symbol? sym) (extra env sym)))))
               result (cond
                        has-term? true
 
@@ -93,6 +101,286 @@
           (when cache-key
             (swap! breakpoint-cache assoc cache-key (boolean result)))
           result)))))
+
+(def ^:private pcps-async-sym 'is.simm.partial-cps.async/async)
+(def ^:private pcps-dual-sym 'is.simm.partial-cps.async/async+sync)
+
+(defn- macro-name
+  "Resolve sym to the fully-qualified name of the MACRO it refers to, or nil.
+   Needed because cljs.analyzer/resolve-var GUESSES a current-ns name for
+   unresolvable runtime symbols (macros have no runtime var), so var-name's
+   var-first `or` never reaches its macro fallback for macro-only names."
+  [env sym]
+  (when (and (symbol? sym) (not (special-symbol? sym)))
+    (if (:js-globals env)
+      (:name (resolve-macro-var-cljs env sym))
+      (when-let [v (resolve env sym)]
+        (when (:macro (meta v))
+          (let [m (meta v)]
+            (symbol (str (:ns m)) (name (:name m)))))))))
+
+(defn binding-symbols
+  "All symbols BOUND by a binding form: plain symbols, & rest args, vector and
+   map destructuring (:keys/:syms/:strs incl. namespaced, :as aliases, nested
+   forms), ignoring :or defaults and `&` itself."
+  [x]
+  (cond
+    (symbol? x) (when-not (= '& x) [x])
+    (vector? x) (mapcat binding-symbols x)
+    (map? x) (mapcat (fn [[k v]]
+                       (cond
+                         (and (keyword? k) (#{"keys" "syms" "strs"} (name k)))
+                         (map (comp symbol name) v)
+                         (= :as k) [v]
+                         (= :or k) nil
+                         (keyword? k) nil
+                         :else (binding-symbols k)))
+                     x)
+    :else nil))
+
+(defn bind-locals
+  "Extend the macroexpansion env so `var-name`/`expand-macro` see `syms` as
+   locals: on clj `&env` is a map keyed by local symbols (`resolve` only
+   checks key presence); on cljs the analyzer looks in `:locals`."
+  [env syms]
+  (if (:js-globals env)
+    (update env :locals (fnil into {}) (map (fn [s] [s {:name s}])) syms)
+    (into (or env {}) (map (fn [s] [s true])) syms)))
+
+(defn- guard-shadowing!
+  "Reject local bindings NAMED await/async inside a dual body. The sync-arm
+   strip is env-threaded and would resolve the local correctly — but the
+   ASYNC arm's transform cannot (on cljs its env extension does not reach the
+   analyzer's :locals), so the two arms would diverge. Fail the build instead."
+  [syms form]
+  (doseq [s syms]
+    (when (and (symbol? s) (#{"await" "async"} (name s)))
+      (throw (ex-info (str "async+sync: locally binding `" s "` inside a dual "
+                           "body is unsupported (the async arm would still "
+                           "treat it as a suspension point) — rename the local")
+                      {:binding s :form form})))))
+
+(defn assert-no-bare-breakpoints!
+  "Closures are OPAQUE to the CPS transform: a bare breakpoint inside a
+   `fn*`/`reify*`/`deftype*` body can never suspend, so it is a compile-time
+   error in BOTH arms rather than a silent divergence (the strip used to
+   erase it, the async arm left it to fail at runtime). Nested
+   `async`/`async+sync` bodies open their own transform scope and are
+   skipped — a fn CONSTRUCTING an async expression is a value and legal.
+   Env-threaded so locals shadowing a breakpoint name (fn self-name, params,
+   lets) are not false positives. Breakpoints hidden behind unexpanded user
+   macros are not detected (the closure is never expanded by either arm)."
+  [form {:keys [breakpoints env]} outer-form]
+  (letfn [(scan-fn* [env f]
+            (let [tail (rest f)
+                  [nm tail] (if (symbol? (first tail))
+                              [(first tail) (rest tail)]
+                              [nil tail])
+                  env (if nm (bind-locals env [nm]) env)
+                  arities (if (vector? (first tail)) [tail] tail)]
+              (doseq [[params & body] arities]
+                (let [env' (bind-locals env (binding-symbols params))]
+                  (run! #(scan env' %) body)))))
+          (scan [env f]
+            (cond
+              (seq? f)
+              (let [head (first f)]
+                (cond
+                  (= 'quote head) nil
+
+                  (and (symbol? head)
+                       (or (= pcps-async-sym (macro-name env head))
+                           (= pcps-dual-sym (macro-name env head))))
+                  nil
+
+                  (and (symbol? head)
+                       (contains? breakpoints (var-name env head)))
+                  (throw (ex-info (str "breakpoint `" head "` inside a fn literal can "
+                                       "never suspend (closures are opaque to the CPS "
+                                       "transform) — hoist it out of the fn, or make the "
+                                       "fn body its own (async ...)")
+                                  {:breakpoint head :fn-form outer-form :site f}))
+
+                  :else
+                  (case head
+                    (let* loop*)
+                    (let [[_ bindings & body] f]
+                      (loop [env env, ps (seq (partition 2 bindings))]
+                        (if-let [[[b e] & more] ps]
+                          (do (scan env e)
+                              (recur (bind-locals env (binding-symbols b)) more))
+                          (run! #(scan env %) body))))
+
+                    fn*
+                    (scan-fn* env f)
+
+                    letfn*
+                    (let [[_ bindings & body] f
+                          env' (bind-locals env (take-nth 2 bindings))]
+                      ;; fn names are in scope in every fn body (mutual recursion)
+                      (run! #(scan env' %) (take-nth 2 (rest bindings)))
+                      (run! #(scan env' %) body))
+
+                    catch
+                    (let [[_ _cls b & body] f
+                          env' (bind-locals env [b])]
+                      (run! #(scan env' %) body))
+
+                    (run! #(scan env %) f))))
+              (coll? f) (run! #(scan env %) f)
+              :else nil))]
+    (scan env form))
+  nil)
+
+(declare strip-breakpoints*)
+
+(defn strip-breakpoints
+  "Rewrite `form` to its SYNCHRONOUS shape:
+   - every resolved breakpoint call `(await x)` becomes `x`,
+   - a nested resolved `(async & body)` becomes `(do & body)`,
+   - a nested resolved `(async+sync s & body)` becomes `(do & body)`
+     (same-mode semantics: a synchronous context strips all the way down).
+   Resolution uses the SAME `var-name` lookup (after the same macroexpansion
+   discipline) as the async transform — a breakpoint is matched on the
+   ORIGINAL operator before expansion — so whatever the async arm would
+   treat as a suspension point, the sync arm un-suspends.
+
+   The walk is ENV-THREADED: locals introduced by let*/loop*/letfn*/catch
+   extend the resolution env, so macros expanding inside the body see their
+   enclosing locals in &env, and resolution matches the compiler's scoping.
+   fn*/reify*/deftype* are OPAQUE (matching the async transform, which never
+   descends into closures); a bare breakpoint inside one is a compile-time
+   error via `assert-no-bare-breakpoints!`. `(. obj (method args))` member
+   position is never treated as call position. Quoted forms are untouched;
+   locals shadowing await/async are rejected at compile time (the async arm
+   cannot handle them).
+
+   CAVEAT: macros in the body are expanded eagerly at strip time and the
+   expansion is emitted — an &env-sensitive macro sees the threaded env of
+   this walk, which now includes body locals, but expansion happens once per
+   arm and the two arms expand independently.
+
+   Site-free subtrees are emitted VERBATIM (the direct-emission analogue of
+   the CPS emitter's `(r form)` fast path): `has-breakpoints?` with an
+   :extra-site? counting nested async/async+sync forms decides, over caches
+   private to this walk (cache entries are site-predicate-dependent, so they
+   must never be shared with an invert pass)."
+  [form {:keys [breakpoints env] :as ctx}]
+  (let [ctx (assoc ctx
+                   :extra-site? (fn [env head]
+                                  (or (= pcps-async-sym (macro-name env head))
+                                      (= pcps-dual-sym (macro-name env head))))
+                   :expansion-cache (atom {})
+                   :breakpoint-cache (atom {}))]
+    (strip-breakpoints* form ctx)))
+
+(defn- strip-breakpoints*
+  [form {:keys [breakpoints env] :as ctx}]
+  (letfn [(site-free? [env f]
+            (not (has-breakpoints? f (assoc ctx :env env))))
+          (walk-bindings [env bindings]
+            ;; sequential let-semantics: each init sees the previous bindings
+            (loop [env env, ps (seq (partition 2 bindings)), out []]
+              (if-let [[[b e] & more] ps]
+                (let [e' (walk env e)
+                      syms (binding-symbols b)]
+                  (guard-shadowing! syms bindings)
+                  (recur (bind-locals env syms) more (conj out b e')))
+                [env out])))
+          (walk-case* [env f]
+            ;; only RESULT positions are expressions; test constants must not
+            ;; be walked (a list-shaped constant is not a call)
+            (if (:js-globals env)
+              ;; cljs: (case* test keys-vec vals-vec default)
+              (let [[_ test keys-vec vals-vec default] f]
+                (with-meta (list 'case* (walk env test) keys-vec
+                                 (mapv #(walk env %) vals-vec) (walk env default))
+                  (meta f)))
+              ;; clj: (case* ge shift mask default imap & args), imap {hash [const expr]}
+              ;; — rebuilt via (empty imap): the compiler depends on the imap's
+              ;; map TYPE/ordering for dispatch (a plain {} misdispatches)
+              (let [[_ ge shift mask default imap & more] f
+                    imap' (reduce-kv (fn [m k [c e]] (assoc m k [c (walk env e)]))
+                                     (empty imap) imap)]
+                (with-meta (list* 'case* ge shift mask (walk env default) imap' more)
+                  (meta f)))))
+          (walk [env f]
+            (cond
+              ;; verbatim fast path: nothing to rewrite anywhere below
+              (site-free? env f) f
+
+              (seq? f)
+              (let [head (first f)]
+                (cond
+                  (= 'quote head) f
+
+                  (and (symbol? head)
+                       (contains? breakpoints (var-name env head)))
+                  (do (assert (= 2 (count f))
+                              (str "breakpoint call must have exactly one argument: " f))
+                      (walk env (second f)))
+
+                  (and (symbol? head)
+                       (= pcps-async-sym (macro-name env head)))
+                  (with-meta (cons 'do (map #(walk env %) (rest f))) (meta f))
+
+                  (and (symbol? head)
+                       (= pcps-dual-sym (macro-name env head)))
+                  (with-meta (cons 'do (map #(walk env %) (drop 2 f))) (meta f))
+
+                  ;; (. obj member) / (. obj (method args…)) / (. obj method args…):
+                  ;; the member position is not call position — never resolve it
+                  (= '. head)
+                  (let [[_ target & more] f
+                        fix (fn [m] (if (seq? m)
+                                      (with-meta (cons (first m) (map #(walk env %) (rest m)))
+                                        (meta m))
+                                      (walk env m)))]
+                    (with-meta (list* '. (walk env target) (map fix more)) (meta f)))
+
+                  :else
+                  (if-let [[expanded _] (expand-macro f env)]
+                    (walk env expanded)
+                    (case head
+                      (fn* reify* deftype*)
+                      (do (assert-no-bare-breakpoints! f (assoc ctx :env env) f)
+                          f)
+
+                      (let* loop*)
+                      (let [[_ bindings & body] f
+                            [env' bindings'] (walk-bindings env bindings)]
+                        (with-meta
+                          (list* head (vec bindings') (map #(walk env' %) body))
+                          (meta f)))
+
+                      letfn*
+                      (let [[_ bindings & body] f
+                            names (take-nth 2 bindings)
+                            _ (guard-shadowing! names f)
+                            env' (bind-locals env names)]
+                        (with-meta
+                          (list* 'letfn*
+                                 (vec (map-indexed (fn [i x] (if (odd? i) (walk env' x) x))
+                                                   bindings))
+                                 (map #(walk env' %) body))
+                          (meta f)))
+
+                      catch
+                      (let [[_ cls b & body] f
+                            _ (guard-shadowing! [b] f)
+                            env' (bind-locals env [b])]
+                        (with-meta (list* 'catch cls b (map #(walk env' %) body)) (meta f)))
+
+                      case*
+                      (walk-case* env f)
+
+                      (with-meta (apply list (map #(walk env %) f)) (meta f))))))
+
+              (vector? f) (with-meta (mapv #(walk env %) f) (meta f))
+              (map? f) (into (empty f) (map (fn [[k v]] [(walk env k) (walk env v)])) f)
+              (set? f) (into (empty f) (map #(walk env %)) f)
+              :else f))]
+    (walk env form)))
 
 (defn can-inline?
   [form]
@@ -129,10 +417,10 @@
       (then coll))))
 
 (defn add-env-syms [ctx syms]
-  ;; This adds mappings to "true" into the environment map. This doesn't quite
-  ;; match what the Clojure compiler does, but I think it's already recommended
-  ;; that macros don't depend on the values in the &env map.
-  (update ctx :env (fnil into {}) (map (fn [sym] [sym true])) syms))
+  ;; Extend the transform env with locals via `bind-locals` — on clj that is
+  ;; a key-presence entry (`resolve` only checks contains?), on cljs it must
+  ;; reach the analyzer's :locals or shadowing stays invisible to resolution.
+  (update ctx :env bind-locals syms))
 
 (defn handle-binding-form
   "Handle binding/with-redefs forms to restore bindings in continuations.
@@ -237,8 +525,14 @@
       (or (special-symbol? head) (= head 'let) (= head 'letfn) (= head 'loop) (= head 'fn))
       (case head
 
-        (quote var fn* fn deftype* reify* clojure.core/import*)
+        (quote var clojure.core/import*)
         `(~r ~form)
+
+        (fn* fn deftype* reify*)
+        ;; closures are opaque to the transform: a bare breakpoint inside can
+        ;; never suspend — reject at compile time instead of failing at runtime
+        (do (assert-no-bare-breakpoints! form ctx form)
+            `(~r ~form))
 
         if
         (let [[con left right & unexpected-others] tail
@@ -267,10 +561,11 @@
                 ;; Transform default expression
                 inverted-default (invert-impl ctx default-expr)]
             `(case* ~test-expr ~keys-vec ~inverted-vals ~inverted-default))
-          ;; CLJ format
+          ;; CLJ format — (empty imap) preserves the imap's map type/ordering,
+          ;; which the compiled case* dispatch depends on
           (let [[ge shift mask default imap & args] tail
                 imap (reduce-kv #(assoc %1 %2 (update %3 1 (fn [v] (invert-impl ctx v))))
-                                {} imap)]
+                                (empty imap) imap)]
             `(case* ~ge ~shift ~mask ~(invert-impl ctx default) ~imap ~@args)))
 
         let*
@@ -421,10 +716,17 @@
         (throw (ex-info (str "Unsupported special symbol [" head "]")
                         {:unknown-special-form head :form form})))
 
-      ;; Invoke termination handler, e.g. do-await
+      ;; Invoke termination handler, e.g. do-await — unless this arm ERASES
+      ;; the breakpoint (interpretation :erase — the site is not a suspension
+      ;; point here; inline its single argument and keep transforming)
       (contains? breakpoints (var-name env head))
-      (let [handler (resolve (breakpoints (var-name env head)))]
-        (resolve-sequentially ctx (rest form) (handler ctx r e)))
+      (let [bp (var-name env head)]
+        (if (= :erase (get (:interpretations ctx) bp))
+          (do (assert (= 2 (count form))
+                      (str "breakpoint call must have exactly one argument: " form))
+              (invert-impl ctx (second form)))
+          (let [handler (resolve (breakpoints bp))]
+            (resolve-sequentially ctx (rest form) (handler ctx r e)))))
 
       (seq? form)
       (resolve-sequentially ctx form (fn [form] `(~r ~(seq form))))
