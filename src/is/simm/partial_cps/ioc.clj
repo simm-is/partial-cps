@@ -423,8 +423,11 @@
 
       ;; Invoke termination handler, e.g. do-await
       (contains? breakpoints (var-name env head))
+      ;; The handler also gets the call form itself as :form, so it can tell
+      ;; call sites apart by their source position ((meta form) keeps :line
+      ;; and :column through macroexpansion).
       (let [handler (resolve (breakpoints (var-name env head)))]
-        (resolve-sequentially ctx (rest form) (handler ctx r e)))
+        (resolve-sequentially ctx (rest form) (handler (assoc ctx :form form) r e)))
 
       (seq? form)
       (resolve-sequentially ctx form (fn [form] `(~r ~(seq form))))
