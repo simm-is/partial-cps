@@ -41,3 +41,24 @@
    keeps the `Thunk` type reference inside this namespace (see `thunk?`)."
   [t]
   ((.-f ^Thunk t)))
+
+;; -----------------------------------------------------------------------------
+;; Whose trampoline is this?
+;;
+;; Host-specific, so it lives here: `async.cljc` is also interpreted inside
+;; sandboxes (SCI with interop locked) that inject this namespace natively.
+;; -----------------------------------------------------------------------------
+
+(defn trampoline-token
+  "The value to bind `async/*in-trampoline*` to when starting a trampoline on
+   this thread."
+  []
+  #?(:clj (Thread/currentThread) :cljs true))
+
+(defn owns-trampoline?
+  "Whether `token`, the current value of `async/*in-trampoline*`, names a
+   trampoline running on THIS thread."
+  [token]
+  #?(:clj (identical? token (Thread/currentThread))
+     :cljs (boolean token)))
+

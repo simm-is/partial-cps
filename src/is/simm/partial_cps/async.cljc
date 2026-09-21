@@ -36,13 +36,12 @@
    that is not a trampoline, and the continuation was lost. So the flag names
    its thread, and only that thread believes it."
   []
-  #?(:clj (identical? *in-trampoline* (Thread/currentThread))
-     :cljs (boolean *in-trampoline*)))
+  (runtime/owns-trampoline? *in-trampoline*))
 
 (defn ^:no-doc trampoline-token
   "The value to bind `*in-trampoline*` to when starting a trampoline here."
   []
-  #?(:clj (Thread/currentThread) :cljs true))
+  (runtime/trampoline-token))
 
 (defn invoke-continuation
   "Invoke a CPS continuation, handling Thunk returns via trampoline.
