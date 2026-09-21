@@ -507,11 +507,7 @@
                    ;; Core CPS execution with trampoline
                    cps-execution `(if (async/in-trampoline?)
                                     ~(ioc/invert params body-form)
-                                    (binding [async/*in-trampoline* (async/trampoline-token)]
-                                      (loop [result# ~(ioc/invert params body-form)]
-                                        (if (is.simm.partial-cps.runtime/thunk? result#)
-                                          (recur (is.simm.partial-cps.runtime/force-thunk result#))
-                                          result#))))
+                                    (async/with-trampoline ~(ioc/invert params body-form)))
                    ;; Wrap with user bindings if any
                    wrapped-execution (if (seq restore-bindings)
                                        `(binding ~restore-bindings ~cps-execution)

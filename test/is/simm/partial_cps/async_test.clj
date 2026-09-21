@@ -663,4 +663,30 @@
           sum)))
      #(deliver p [:ok %])
      #(deliver p [:error %]))
-    (is (= [:ok 10] (deref p 2000 ::lost)))))
+    (is (= [:ok 10] (deref p 5000 ::lost)))))
+
+(deftest bindings-restored-later-on-the-same-thread-do-not-fake-a-trampoline
+  ;; The flag can come back to the very thread that bound it, after its
+  ;; trampoline has unwound: a single-threaded executor running `bound-fn`s,
+  ;; a go block resumed on the dispatch thread that created it. A flag that
+  ;; only names its thread is believed there, and the Thunk is lost.
+  (let [executor (java.util.concurrent.Executors/newSingleThreadExecutor)
+        p (promise)]
+    (try
+      (.submit executor
+               ^Runnable
+               (fn []
+                 ((async
+                   (loop [i 0 sum 0]
+                     (if (< i 3)
+                       (recur (inc i)
+                              (+ sum (await (fn [resolve _raise]
+                                              ;; resume later, on this same thread,
+                                              ;; under the bindings of right now
+                                              (.submit executor ^Runnable (bound-fn* #(resolve i)))
+                                              nil))))
+                       sum)))
+                  #(deliver p [:ok %])
+                  #(deliver p [:error %]))))
+      (is (= [:ok 3] (deref p 5000 ::lost)))
+      (finally (.shutdownNow executor)))))

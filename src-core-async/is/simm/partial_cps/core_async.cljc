@@ -69,10 +69,16 @@
     ;; and return it. A callback that arrives later, on another thread, runs its
     ;; own trampoline (see `async/in-trampoline?`) and returns nothing we need.
     (let [in-call? (volatile! true)
+          caller #?(:clj (Thread/currentThread) :cljs nil)
           returned (volatile! nil)]
       (take! ch (fn [v]
                   (let [r (if (error? v) (raise (rewrap v)) (resolve v))]
-                    (when @in-call? (vreset! returned r))
+                    ;; only the callback that ran inside this call, on this
+                    ;; thread, has a caller waiting for what it returned
+                    (when (and @in-call?
+                               #?(:clj (identical? caller (Thread/currentThread))
+                                  :cljs true))
+                      (vreset! returned r))
                     nil)))
       (vreset! in-call? false)
       @returned)))

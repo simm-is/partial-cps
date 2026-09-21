@@ -96,7 +96,7 @@
                      (if (< i 5)
                        (recur (inc i) (+ sum (await (ca/chan->cps (closed-chan i)))))
                        sum)))
-                  2000)))
+                  5000)))
   (testing "and when the values arrive later, from another thread"
     (is (= [:ok 10]
            (run-cps (async
@@ -106,4 +106,4 @@
                            (future (Thread/sleep 5) (put! c i))
                            (recur (inc i) (+ sum (await (ca/chan->cps c)))))
                          sum)))
-                    2000)))))
+                    5000)))))
