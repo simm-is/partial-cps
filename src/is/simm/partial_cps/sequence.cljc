@@ -505,9 +505,9 @@
                    e (gensym "e__")
                    params {:r r :e e :env &env :breakpoints merged-breakpoints}
                    ;; Core CPS execution with trampoline
-                   cps-execution `(if async/*in-trampoline*
+                   cps-execution `(if (async/in-trampoline?)
                                     ~(ioc/invert params body-form)
-                                    (binding [async/*in-trampoline* true]
+                                    (binding [async/*in-trampoline* (async/trampoline-token)]
                                       (loop [result# ~(ioc/invert params body-form)]
                                         (if (is.simm.partial-cps.runtime/thunk? result#)
                                           (recur (is.simm.partial-cps.runtime/force-thunk result#))

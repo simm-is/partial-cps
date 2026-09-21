@@ -75,3 +75,35 @@
   (is (true? (ca/chan? (chan))))
   (is (false? (ca/chan? 42)))
   (is (false? (ca/chan? (fn [_ _])))))
+
+;; -----------------------------------------------------------------------------
+;; A continuation must survive a channel that is already full
+;; -----------------------------------------------------------------------------
+
+(defn- run-cps [cps timeout-ms]
+  (let [p (promise)]
+    (cps #(deliver p [:ok %]) #(deliver p [:error %]))
+    (deref p timeout-ms ::lost)))
+
+(deftest a-loop-awaiting-ready-channels-runs-to-its-end
+  ;; `take!` runs its callback on the calling thread when the channel already
+  ;; holds a value, and drops what the callback returns. In a loop that return
+  ;; value is the Thunk of the `recur`; dropped, the await never returns and no
+  ;; thread is blocked anywhere.
+  (is (= [:ok 10]
+         (run-cps (async
+                   (loop [i 0 sum 0]
+                     (if (< i 5)
+                       (recur (inc i) (+ sum (await (ca/chan->cps (closed-chan i)))))
+                       sum)))
+                  2000)))
+  (testing "and when the values arrive later, from another thread"
+    (is (= [:ok 10]
+           (run-cps (async
+                     (loop [i 0 sum 0]
+                       (if (< i 5)
+                         (let [c (chan 1)]
+                           (future (Thread/sleep 5) (put! c i))
+                           (recur (inc i) (+ sum (await (ca/chan->cps c)))))
+                         sum)))
+                    2000)))))

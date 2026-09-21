@@ -19,7 +19,30 @@
   [async-cb]
   (throw (ex-info "await called outside of asynchronous scope" {:async-cb async-cb})))
 
-(def ^:dynamic *in-trampoline* false)
+(def ^:dynamic *in-trampoline*
+  "Whether the current continuation runs inside a trampoline that will force
+   the Thunk it returns. Bound to a token of the thread that owns the
+   trampoline (JVM) or to true (cljs); read it through `in-trampoline?`.
+   Binding it to false forces a fresh trampoline."
+  false)
+
+(defn in-trampoline?
+  "True when THIS thread is inside a trampoline.
+
+   The flag is a dynamic var, and dynamic bindings travel: `future`, agents
+   and core.async go blocks convey the bindings of the thread that created
+   them. A callback that arrives on such a thread used to see the flag of a
+   trampoline that lives on another thread, returned its Thunk to a caller
+   that is not a trampoline, and the continuation was lost. So the flag names
+   its thread, and only that thread believes it."
+  []
+  #?(:clj (identical? *in-trampoline* (Thread/currentThread))
+     :cljs (boolean *in-trampoline*)))
+
+(defn ^:no-doc trampoline-token
+  "The value to bind `*in-trampoline*` to when starting a trampoline here."
+  []
+  #?(:clj (Thread/currentThread) :cljs true))
 
 (defn invoke-continuation
   "Invoke a CPS continuation, handling Thunk returns via trampoline.
@@ -36,10 +59,10 @@
   [cont-fn & args]
   (let [result (apply cont-fn args)]
     (if (runtime/thunk? result)
-      (if *in-trampoline*
+      (if (in-trampoline?)
         result  ; Already in trampoline, return Thunk
         ;; Not in trampoline, execute it
-        (binding [*in-trampoline* true]
+        (binding [*in-trampoline* (trampoline-token)]
           (loop [r result]
             (if (runtime/thunk? r)
               (recur (runtime/force-thunk r))
@@ -66,9 +89,9 @@
       ;; skip that pass → linear compile. (Semantically identical here.)
       `(let [safe-r# (fn [v#]
                        (try
-                         (if *in-trampoline*
+                         (if (in-trampoline?)
                            (~r v#)
-                           (binding [*in-trampoline* true]
+                           (binding [*in-trampoline* (trampoline-token)]
                              (loop [result# (~r v#)]
                                (if (runtime/thunk? result#)
                                   ;; If continuation returns a thunk, trampoline it
@@ -105,9 +128,9 @@
            form (cons 'do body)]
        `(fn [~r ~e]
           (try
-            (if *in-trampoline*
+            (if (in-trampoline?)
               ~(invert params form)
-              (binding [*in-trampoline* true]
+              (binding [*in-trampoline* (trampoline-token)]
                 (loop [result# ~(invert params form)]
                   (if (runtime/thunk? result#)
                     ;; If continuation returns a thunk, trampoline it

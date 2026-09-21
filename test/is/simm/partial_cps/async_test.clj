@@ -642,3 +642,25 @@
 
 (defn run-all-tests []
   (run-tests 'is.simm.partial-cps-test))
+;; -----------------------------------------------------------------------------
+;; The trampoline flag belongs to a thread
+;; -----------------------------------------------------------------------------
+
+(deftest a-callback-from-a-thread-that-conveys-bindings-keeps-its-continuation
+  ;; `future` (like agents and core.async go blocks) conveys the dynamic
+  ;; bindings of the thread that created it, the trampoline flag included. A
+  ;; callback arriving there used to believe it was inside the creator's
+  ;; trampoline, returned the Thunk of the `recur` to the future, and the loop
+  ;; was never continued.
+  (let [p (promise)]
+    ((async
+      (loop [i 0 sum 0]
+        (if (< i 5)
+          (recur (inc i)
+                 (+ sum (await (fn [resolve _raise]
+                                 (future (Thread/sleep 2) (resolve i))
+                                 nil))))
+          sum)))
+     #(deliver p [:ok %])
+     #(deliver p [:error %]))
+    (is (= [:ok 10] (deref p 2000 ::lost)))))
