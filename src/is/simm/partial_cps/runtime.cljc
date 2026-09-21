@@ -4,14 +4,12 @@
 (defn ^:no-doc bound-fn
   [f]
   #?(:clj
-     (let [bound-frame (clojure.lang.Var/getThreadBindingFrame)]
-       (fn [& args]
-         (let [call-site-frame (clojure.lang.Var/getThreadBindingFrame)]
-           (clojure.lang.Var/resetThreadBindingFrame bound-frame)
-           (try
-             (apply f args)
-             (finally
-               (clojure.lang.Var/resetThreadBindingFrame call-site-frame))))))
+     ;; Delegate to clojure.core/bound-fn* (identical frame-capture
+     ;; semantics on the JVM; note bound-fn without the * is a macro taking
+     ;; an fntail, not a fn value) instead of hand-rolling
+     ;; Var/getThreadBindingFrame statics, which alternative runtimes
+     ;; (e.g. Jolt) do not expose.
+     (clojure.core/bound-fn* f)
      ;; no dynamic binding support for async code in cljs (same for core.async)
      :cljs identity))
 
