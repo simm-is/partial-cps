@@ -423,8 +423,13 @@
 
       ;; Invoke termination handler, e.g. do-await
       (contains? breakpoints (var-name env head))
+      ;; The handler also gets the call form itself as :form, so it can tell
+      ;; call sites apart. (meta form) has :line and :column for a call that
+      ;; was READ from source; a call produced by another macro has none
+      ;; (syntax-quote strips them), never a wrong one. There is no :file:
+      ;; a site key needs the namespace as well, or the form itself.
       (let [handler (resolve (breakpoints (var-name env head)))]
-        (resolve-sequentially ctx (rest form) (handler ctx r e)))
+        (resolve-sequentially ctx (rest form) (handler (assoc ctx :form form) r e)))
 
       (seq? form)
       (resolve-sequentially ctx form (fn [form] `(~r ~(seq form))))
