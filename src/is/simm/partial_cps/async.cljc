@@ -2,14 +2,17 @@
   (:refer-clojure :exclude [await])
   (:require [is.simm.partial-cps.runtime :as runtime]
             #?(:clj [is.simm.partial-cps.ioc :refer [has-breakpoints? invert]]))
-  #?(:cljs (:require-macros [is.simm.partial-cps.async :refer [async]])))
+  #?(:cljs (:require-macros [is.simm.partial-cps.async :refer [async with-trampoline]])))
 
 (defn await
   "Awaits the asynchronous execution of continuation-passing style function
    async-cb, applying it to args and two extra callback functions: resolve and
    raise. cps-fn is expected to eventually either call resolve with the result,
-   call raise with the exception or just throw in the calling thread. The
-   return value of cps-fn is ignored. Effectively returns the value passed to
+   call raise with the exception or just throw in the calling thread. A
+   cps-fn that calls resolve or raise SYNCHRONOUSLY, on the calling thread,
+   must return what that call returned: inside a loop it is the Thunk of the
+   `recur`, and the trampoline that called cps-fn is the one to force it. The
+   return value of a cps-fn that completes later is ignored. Effectively returns the value passed to
    resolve or throws the exception passed to raise (or thrown) but does not
    block the calling tread.
 
@@ -19,7 +22,33 @@
   [async-cb]
   (throw (ex-info "await called outside of asynchronous scope" {:async-cb async-cb})))
 
-(def ^:dynamic *in-trampoline* false)
+(def ^:dynamic *in-trampoline*
+  "The token of the trampoline activation the current continuation runs in, or
+   false. Read it through `in-trampoline?`, start a trampoline with
+   `with-trampoline`. Binding it to false forces a fresh trampoline."
+  false)
+
+(defn in-trampoline?
+  "True when a trampoline is running on this thread that will force the Thunk
+   the current continuation returns. See `runtime/owns-trampoline?` for why the
+   flag alone does not say so."
+  []
+  (runtime/owns-trampoline? *in-trampoline*))
+
+#?(:clj
+   (defmacro with-trampoline
+     "Evaluate `body` as a new trampoline activation and force the Thunks it
+      returns. For code that starts trampolines of its own; `async` and
+      `invoke-continuation` already do."
+     [& body]
+     `(let [entered# (runtime/enter-trampoline!)]
+        (try
+          (binding [*in-trampoline* (nth entered# 0)]
+            (loop [result# (do ~@body)]
+              (if (runtime/thunk? result#)
+                (recur (runtime/force-thunk result#))
+                result#)))
+          (finally (runtime/leave-trampoline! (nth entered# 1)))))))
 
 (defn invoke-continuation
   "Invoke a CPS continuation, handling Thunk returns via trampoline.
@@ -36,14 +65,10 @@
   [cont-fn & args]
   (let [result (apply cont-fn args)]
     (if (runtime/thunk? result)
-      (if *in-trampoline*
+      (if (in-trampoline?)
         result  ; Already in trampoline, return Thunk
         ;; Not in trampoline, execute it
-        (binding [*in-trampoline* true]
-          (loop [r result]
-            (if (runtime/thunk? r)
-              (recur (runtime/force-thunk r))
-              r))))
+        (with-trampoline result))
       result)))
 
 (defn await-handler
@@ -66,14 +91,9 @@
       ;; skip that pass → linear compile. (Semantically identical here.)
       `(let [safe-r# (fn [v#]
                        (try
-                         (if *in-trampoline*
+                         (if (in-trampoline?)
                            (~r v#)
-                           (binding [*in-trampoline* true]
-                             (loop [result# (~r v#)]
-                               (if (runtime/thunk? result#)
-                                  ;; If continuation returns a thunk, trampoline it
-                                 (recur (runtime/force-thunk result#))
-                                 result#))))
+                           (with-trampoline (~r v#)))
                          (catch ~(if (:js-globals env) :default `Throwable) t# (~e t#))))]
          (~(first args) safe-r# ~e)))))
 
@@ -105,12 +125,7 @@
            form (cons 'do body)]
        `(fn [~r ~e]
           (try
-            (if *in-trampoline*
+            (if (in-trampoline?)
               ~(invert params form)
-              (binding [*in-trampoline* true]
-                (loop [result# ~(invert params form)]
-                  (if (runtime/thunk? result#)
-                    ;; If continuation returns a thunk, trampoline it
-                    (recur (runtime/force-thunk result#))
-                    result#))))
+              (with-trampoline ~(invert params form)))
             (catch ~(if (:js-globals &env) :default `Throwable) t# (~e t#)))))))

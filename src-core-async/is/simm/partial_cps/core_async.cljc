@@ -60,7 +60,28 @@
    `take!` the channel, `raise` on a Throwable/JS-error value, else `resolve`."
   [ch]
   (fn [resolve raise]
-    (take! ch (fn [v] (if (error? v) (raise (rewrap v)) (resolve v))))))
+    ;; `take!` runs its callback ON THE CALLING THREAD when the channel already
+    ;; holds a value, and drops what the callback returns. Inside a trampoline
+    ;; that return value is the continuation's Thunk (a `recur`, the rest of a
+    ;; loop), and a CPS fn that resolves synchronously must hand it back to its
+    ;; caller. Dropping it loses the continuation: the await never returns and
+    ;; nothing is blocked anywhere. So keep what a synchronous callback returned
+    ;; and return it. A callback that arrives later, on another thread, runs its
+    ;; own trampoline (see `async/in-trampoline?`) and returns nothing we need.
+    (let [in-call? (volatile! true)
+          caller #?(:clj (Thread/currentThread) :cljs nil)
+          returned (volatile! nil)]
+      (take! ch (fn [v]
+                  (let [r (if (error? v) (raise (rewrap v)) (resolve v))]
+                    ;; only the callback that ran inside this call, on this
+                    ;; thread, has a caller waiting for what it returned
+                    (when (and @in-call?
+                               #?(:clj (identical? caller (Thread/currentThread))
+                                  :cljs true))
+                      (vreset! returned r))
+                    nil)))
+      (vreset! in-call? false)
+      @returned)))
 
 (defn ->cps
   "Normalize value | core.async channel | CPS fn into a partial-cps CPS fn

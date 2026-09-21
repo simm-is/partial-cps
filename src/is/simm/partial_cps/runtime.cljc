@@ -41,3 +41,50 @@
    keeps the `Thunk` type reference inside this namespace (see `thunk?`)."
   [t]
   ((.-f ^Thunk t)))
+
+;; -----------------------------------------------------------------------------
+;; Which trampoline is running here?
+;;
+;; Host-specific, so it lives here: `async.cljc` is also interpreted inside
+;; sandboxes (SCI with interop locked) that inject this namespace natively.
+;;
+;; `async/*in-trampoline*` alone cannot answer the question. It is a dynamic
+;; var, and dynamic bindings travel: `future`, agents, `bound-fn` and
+;; core.async go blocks restore the bindings of whoever created them, on
+;; another thread or LATER ON THE SAME ONE, when the trampoline that bound the
+;; flag has long unwound. A continuation that believes such a flag returns its
+;; Thunk to a caller that is no trampoline, and is lost. So every activation
+;; has its own token; the var carries it (and travels), this thread-local
+;; carries it too (and does not), and a trampoline is running here exactly
+;; when the two agree.
+;; -----------------------------------------------------------------------------
+
+(def ^:private active-trampoline
+  #?(:clj (ThreadLocal.) :cljs (volatile! nil)))
+
+(defn enter-trampoline!
+  "Mark a new trampoline activation on this thread. Returns [token previous]:
+   bind `async/*in-trampoline*` to `token`, pass `previous` to
+   `leave-trampoline!` in a `finally`."
+  []
+  (let [token #?(:clj (Object.) :cljs (js-obj))
+        previous #?(:clj (.get ^ThreadLocal active-trampoline) :cljs @active-trampoline)]
+    #?(:clj (.set ^ThreadLocal active-trampoline token)
+       :cljs (vreset! active-trampoline token))
+    [token previous]))
+
+(defn leave-trampoline!
+  [previous]
+  #?(:clj (if (nil? previous)
+            (.remove ^ThreadLocal active-trampoline)
+            (.set ^ThreadLocal active-trampoline previous))
+     :cljs (vreset! active-trampoline previous))
+  nil)
+
+(defn owns-trampoline?
+  "Whether `token`, the current value of `async/*in-trampoline*`, is the
+   trampoline activation that is running on this thread right now."
+  [token]
+  (and (some? token)
+       (identical? token #?(:clj (.get ^ThreadLocal active-trampoline)
+                            :cljs @active-trampoline))))
