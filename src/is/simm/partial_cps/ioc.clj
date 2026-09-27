@@ -142,16 +142,18 @@
 
 (defn register-binding-restorer!
   "When a continuation fires after the `binding` form that bound `var-sym`
-  was entered, the var is restored to `(restorer saved current)` instead of
-  to `saved`: `saved` is its value when the form was entered, `current` its
-  value when the continuation fires.
+  was entered, the var is restored to `(restorer saved current entered)`
+  instead of to `saved`: `saved` is its value outside the form, `entered` the
+  value the form bound, `current` its value when the continuation fires.
 
   The default — plain `saved` — is right for a var that is lexical state.
   It is wrong for a var the continuation's runner binds from outside (e.g. an
   execution context resumed in a different world than the one the form was
   entered in): restoring `saved` would pull the continuation back into the
   old world. Such a var registers a restorer that keeps `current` and puts
-  back only what the binding form changed.
+  back only what the binding form changed — which `entered` tells apart from
+  a form that meant to switch the var to something else entirely (then
+  `saved` is still right).
 
   Both arguments are fully qualified symbols; call this before the forms
   that bind the var are macro-expanded."
@@ -177,12 +179,15 @@
         wrapped-e (gensym "binding-restore-e__")
         ;; Use plain 'binding' symbol for restoration (works in both CLJ and CLJS)
         binding-sym 'binding
+        ;; the values the form binds, evaluated once before it is entered
+        ;; (as `binding` evaluates every init before pushing any)
+        entered-syms (map #(gensym (str (name %) "-entered__")) var-syms)
         ;; what each var is restored to (see `register-binding-restorer!`)
-        restored (map (fn [var-sym saved]
+        restored (map (fn [var-sym saved entered]
                         (if-let [restorer (get @binding-restorers (var-name env var-sym))]
-                          `(~restorer ~saved ~var-sym)
+                          `(~restorer ~saved ~var-sym ~entered)
                           saved))
-                      var-syms saved-syms)]
+                      var-syms saved-syms entered-syms)]
     (if (has-breakpoints? `(do ~@body) ctx)
       ;; Body has breakpoints - need to wrap continuations.
       ;; IMPORTANT: Do NOT macro-expand the binding form into push/pop-thread-bindings
@@ -193,6 +198,7 @@
       ;; scope exits normally. Continuations fire outside this scope; wrapped-r/wrapped-e
       ;; restore outer binding values.
       `(let [~@(interleave saved-syms var-syms)
+             ~@(interleave entered-syms (map second binding-pairs))
              ;; Wrapped resolve - restores outer bindings before calling original r
              ~wrapped-r (fn [val#]
                           (~binding-sym [~@(interleave var-syms restored)]
@@ -206,7 +212,7 @@
          ;; breakpoint-cache across binding form boundaries. Each DOM element
          ;; macro creates binding forms (with-parent-addr, with-slot), and
          ;; resetting the cache at each level caused exponential re-expansion.
-         (~macro-sym ~bindings
+         (~macro-sym [~@(interleave var-syms entered-syms)]
                      ~(invert-impl (assoc ctx :r wrapped-r :e wrapped-e)
                                    `(do ~@body))))
       ;; No breakpoints in body - just expand normally

@@ -698,7 +698,13 @@
 ;; in another world back into the one the form was entered in.
 (def ^:dynamic *world* {:world :root :scope :outer})
 
-(defn keep-world [saved current] (assoc current :scope (:scope saved)))
+(defn keep-world
+  "A form that changed only the scope keeps the resuming world; a form that
+  switched worlds goes back to the one it left."
+  [saved current entered]
+  (if (= (:world saved) (:world entered))
+    (assoc current :scope (:scope saved))
+    saved))
 
 (ioc/register-binding-restorer! `*world* `keep-world)
 
@@ -731,3 +737,18 @@
               *in-trampoline* false]
       (@k nil))
     (is (= :outer (deref result 1000 :timeout)))))
+
+(deftest test-binding-restorer-sees-a-world-switch
+  (testing "a form that switched worlds returns to the world it left"
+    (let [k (promise)
+          result (promise)]
+      ((async
+        (do (binding [*world* {:world :other :scope :other}]
+              (await (fn [resolve _] (deliver k resolve))))
+            *world*))
+       #(deliver result %)
+       #(deliver result %))
+      (binding [*world* {:world :other :scope :other}
+                *in-trampoline* false]
+        (@k nil))
+      (is (= {:world :root :scope :outer} (deref result 1000 :timeout))))))
