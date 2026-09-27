@@ -752,3 +752,19 @@
                 *in-trampoline* false]
         (@k nil))
       (is (= {:world :root :scope :outer} (deref result 1000 :timeout))))))
+
+(def ^:dynamic *path* [])
+
+(deftest test-binding-restored-across-loop-iterations
+  (testing "a binding form in a loop body does not leak into the next iteration
+            when its continuation returns the recur's Thunk to a trampoline"
+    (let [result (blocking-test
+                  (async
+                   (loop [i 0 seen []]
+                     (if (= i 3)
+                       seen
+                       (recur (inc i)
+                              (conj seen (binding [*path* (conj *path* i)]
+                                           (await (future-delay 5 *path*))))))))
+                  2000)]
+      (is (= [[0] [1] [2]] result)))))
