@@ -161,6 +161,30 @@
   (swap! binding-restorers assoc var-sym restorer-sym)
   nil)
 
+(defn- restoring-continuation
+  "The code of a continuation that calls `k` with the vars restored to
+  `restored` (forms, evaluated once when the continuation fires).
+
+  Restoring them around the call is not enough: inside a running trampoline
+  `k` does not run the rest of the computation, it RETURNS it as a Thunk
+  (e.g. a loop's `recur`), and the trampoline forces that Thunk after this
+  binding has exited — the next loop iteration then ran with the bindings of
+  the form it had left. So a returned Thunk is wrapped to be forced inside the
+  same bindings, and so is every Thunk it returns in turn."
+  [binding-sym var-syms restored k]
+  (let [restored-syms (map #(gensym (str (name %) "-restored__")) var-syms)
+        rebind (gensym "rebind__")]
+    `(fn [v#]
+       (let [~@(interleave restored-syms restored)]
+         (letfn [(~rebind [f#]
+                   (~binding-sym [~@(interleave var-syms restored-syms)]
+                                 (let [x# (f#)]
+                                   (if (is.simm.partial-cps.runtime/thunk? x#)
+                                     (is.simm.partial-cps.runtime/->thunk
+                                      (fn [] (~rebind (fn [] (is.simm.partial-cps.runtime/force-thunk x#)))))
+                                     x#))))]
+           (~rebind (fn [] (~k v#))))))))
+
 (defn handle-binding-form
   "Handle binding/with-redefs forms to restore bindings in continuations.
 
@@ -199,14 +223,10 @@
       ;; restore outer binding values.
       `(let [~@(interleave saved-syms var-syms)
              ~@(interleave entered-syms (map second binding-pairs))
-             ;; Wrapped resolve - restores outer bindings before calling original r
-             ~wrapped-r (fn [val#]
-                          (~binding-sym [~@(interleave var-syms restored)]
-                                        (~r val#)))
-             ;; Wrapped reject - restores outer bindings before calling original e
-             ~wrapped-e (fn [err#]
-                          (~binding-sym [~@(interleave var-syms restored)]
-                                        (~e err#)))]
+             ;; Wrapped resolve/reject - restore the outer bindings for the
+             ;; rest of the computation, see `restoring-continuation`
+             ~wrapped-r ~(restoring-continuation binding-sym var-syms restored r)
+             ~wrapped-e ~(restoring-continuation binding-sym var-syms restored e)]
          ;; Establish bindings for sync execution, CPS-transform just the body
          ;; Use invert-impl (not invert) to preserve the expansion-cache and
          ;; breakpoint-cache across binding form boundaries. Each DOM element
