@@ -134,6 +134,31 @@
   ;; that macros don't depend on the values in the &env map.
   (update ctx :env (fnil into {}) (map (fn [sym] [sym true])) syms))
 
+(defonce ^{:doc "Macro-time registry: fully qualified var symbol -> fully qualified
+  symbol of a function `(restorer saved current)`. See
+  `register-binding-restorer!`."}
+  binding-restorers
+  (atom {}))
+
+(defn register-binding-restorer!
+  "When a continuation fires after the `binding` form that bound `var-sym`
+  was entered, the var is restored to `(restorer saved current)` instead of
+  to `saved`: `saved` is its value when the form was entered, `current` its
+  value when the continuation fires.
+
+  The default — plain `saved` — is right for a var that is lexical state.
+  It is wrong for a var the continuation's runner binds from outside (e.g. an
+  execution context resumed in a different world than the one the form was
+  entered in): restoring `saved` would pull the continuation back into the
+  old world. Such a var registers a restorer that keeps `current` and puts
+  back only what the binding form changed.
+
+  Both arguments are fully qualified symbols; call this before the forms
+  that bind the var are macro-expanded."
+  [var-sym restorer-sym]
+  (swap! binding-restorers assoc var-sym restorer-sym)
+  nil)
+
 (defn handle-binding-form
   "Handle binding/with-redefs forms to restore bindings in continuations.
 
@@ -151,7 +176,13 @@
         wrapped-r (gensym "binding-restore-r__")
         wrapped-e (gensym "binding-restore-e__")
         ;; Use plain 'binding' symbol for restoration (works in both CLJ and CLJS)
-        binding-sym 'binding]
+        binding-sym 'binding
+        ;; what each var is restored to (see `register-binding-restorer!`)
+        restored (map (fn [var-sym saved]
+                        (if-let [restorer (get @binding-restorers (var-name env var-sym))]
+                          `(~restorer ~saved ~var-sym)
+                          saved))
+                      var-syms saved-syms)]
     (if (has-breakpoints? `(do ~@body) ctx)
       ;; Body has breakpoints - need to wrap continuations.
       ;; IMPORTANT: Do NOT macro-expand the binding form into push/pop-thread-bindings
@@ -164,11 +195,11 @@
       `(let [~@(interleave saved-syms var-syms)
              ;; Wrapped resolve - restores outer bindings before calling original r
              ~wrapped-r (fn [val#]
-                          (~binding-sym [~@(interleave var-syms saved-syms)]
+                          (~binding-sym [~@(interleave var-syms restored)]
                                         (~r val#)))
              ;; Wrapped reject - restores outer bindings before calling original e
              ~wrapped-e (fn [err#]
-                          (~binding-sym [~@(interleave var-syms saved-syms)]
+                          (~binding-sym [~@(interleave var-syms restored)]
                                         (~e err#)))]
          ;; Establish bindings for sync execution, CPS-transform just the body
          ;; Use invert-impl (not invert) to preserve the expansion-cache and
