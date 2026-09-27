@@ -2,6 +2,7 @@
   (:refer-clojure :exclude [await])
   (:require [clojure.test :refer [deftest testing is run-tests]]
             [is.simm.partial-cps.runtime :as runtime]
+            [is.simm.partial-cps.ioc :as ioc]
             [is.simm.partial-cps.async :refer [await async *in-trampoline*]]))
 
 ;; Test helpers for Clojure (JVM)
@@ -690,3 +691,43 @@
                   #(deliver p [:error %]))))
       (is (= [:ok 3] (deref p 5000 ::lost)))
       (finally (.shutdownNow executor)))))
+
+;; A var bound from outside by whoever resumes a continuation (an execution
+;; context: which world) combined with lexical state a binding form changes
+;; (its scope). Restoring the saved value would pull a continuation resumed
+;; in another world back into the one the form was entered in.
+(def ^:dynamic *world* {:world :root :scope :outer})
+
+(defn keep-world [saved current] (assoc current :scope (:scope saved)))
+
+(ioc/register-binding-restorer! `*world* `keep-world)
+
+(deftest test-binding-restorer-keeps-the-resuming-world
+  (testing "leaving a binding form restores what the form changed, not the world"
+    (let [k (promise)
+          result (promise)]
+      ((async
+        (do (binding [*world* (assoc *world* :scope :inner)]
+              (await (fn [resolve _] (deliver k resolve))))
+            *world*))
+       #(deliver result %)
+       #(deliver result %))
+      ;; resume in another world, as a fork of the suspended continuation
+      (binding [*world* {:world :fork :scope :inner}
+                *in-trampoline* false]
+        (@k nil))
+      (is (= {:world :fork :scope :outer} (deref result 1000 :timeout))))))
+
+(deftest test-binding-without-restorer-restores-the-saved-value
+  (let [k (promise)
+        result (promise)]
+    ((async
+      (do (binding [*test-var* :inner]
+            (await (fn [resolve _] (deliver k resolve))))
+          *test-var*))
+     #(deliver result %)
+     #(deliver result %))
+    (binding [*test-var* :elsewhere
+              *in-trampoline* false]
+      (@k nil))
+    (is (= :outer (deref result 1000 :timeout)))))
